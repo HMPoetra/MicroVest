@@ -240,7 +240,6 @@ export default async function HomePage() {
             </p>
           </div>
           <div className="w-full">
-            {/* @ts-expect-error - LogoLoop is a JSX component without types */}
             <LogoLoop
               logos={businesses.map((b) => ({ src: b.logo_url, alt: b.name, title: b.name }))}
               speed={50}
