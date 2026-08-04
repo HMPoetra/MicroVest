@@ -14,9 +14,11 @@ interface AssetParams {
   stdDev: number;
 }
 
-// ─── KURS FALLBACK — tidak lagi diperlukan (semua aset tersisa berdenominasi IDR)
-// Tetap disimpan untuk future-proofing jika ada aset USD ditambahkan kembali
+// ─── KURS FALLBACK (dipakai jika fetch live rate gagal) ──────────────────────
 const FALLBACK_USD_TO_IDR = 16_300;
+
+// ─── Aset berdenominasi USD (kosong jika semua instrumen tersisa berdenominasi IDR) ───
+const USD_DENOMINATED = new Set<string>([]);
 
 // ─── Harga dasar realistis dalam IDR (digunakan jika semua sumber gagal) ─────
 const ASSET_SPEC: Record<string, AssetParams> = {
