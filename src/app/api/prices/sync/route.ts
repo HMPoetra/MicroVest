@@ -9,125 +9,136 @@ function randomNormal() {
 }
 
 interface AssetParams {
-  basePrice: number;
-  drift: number;   // expected daily return
-  stdDev: number;  // daily volatility
+  basePriceIDR: number; // harga fallback dalam RUPIAH (IDR)
+  drift: number;
+  stdDev: number;
 }
 
+// ─── KURS FALLBACK — tidak lagi diperlukan (semua aset tersisa berdenominasi IDR)
+// Tetap disimpan untuk future-proofing jika ada aset USD ditambahkan kembali
+const FALLBACK_USD_TO_IDR = 16_300;
+
+// ─── Harga dasar realistis dalam IDR (digunakan jika semua sumber gagal) ─────
 const ASSET_SPEC: Record<string, AssetParams> = {
-  // Emas & Komoditas
-  "ANTAM_1GR": { basePrice: 1350000, drift: 0.0003, stdDev: 0.008 },
-  "ANTAM_5GR": { basePrice: 1336500, drift: 0.0003, stdDev: 0.008 },
-  "UBS_1GR": { basePrice: 1329750, drift: 0.0003, stdDev: 0.008 },
-  "GOLD_OZ": { basePrice: 2350, drift: 0.0003, stdDev: 0.008 },
-  "SILVER_OZ": { basePrice: 28, drift: 0.00025, stdDev: 0.015 },
+  // Emas & Komoditas (IDR/gram atau IDR/satuan)
+  "ANTAM_1GR": { basePriceIDR: 2_650_000,  drift: 0.0003,  stdDev: 0.008  },
+  "ANTAM_5GR": { basePriceIDR: 13_100_000, drift: 0.0003,  stdDev: 0.008  },
+  "UBS_1GR":   { basePriceIDR: 2_610_000,  drift: 0.0003,  stdDev: 0.008  },
 
-  // Reksa Dana
-  "RDPT_MANULIFE": { basePrice: 2800, drift: 0.00045, stdDev: 0.012 },
-  "RDPU_BNI": { basePrice: 1250, drift: 0.00018, stdDev: 0.0002 },
-  "RDPC_SCHRODER": { basePrice: 1850, drift: 0.00032, stdDev: 0.006 },
-  "RDPS_SUCOR": { basePrice: 2200, drift: 0.00048, stdDev: 0.013 },
-  "RDPU_SUCOR": { basePrice: 1500, drift: 0.00015, stdDev: 0.0002 },
+  // Reksa Dana — NAB per unit dalam IDR (simulasi GBM)
+  "RDPT_MANULIFE": { basePriceIDR: 2_850,  drift: 0.00040, stdDev: 0.006  },
+  "RDPU_BNI":      { basePriceIDR: 1_280,  drift: 0.00016, stdDev: 0.0001 },
 
-  // Obligasi
-  "SBR012": { basePrice: 1000000, drift: 0.00022, stdDev: 0.0005 },
-  "ORI023": { basePrice: 1005000, drift: 0.00024, stdDev: 0.0015 },
-  "SR018": { basePrice: 1000000, drift: 0.00021, stdDev: 0.0005 },
-  "FR0097": { basePrice: 1000000, drift: 0.00025, stdDev: 0.0010 },
-
-  // Kripto
-  "BTC_USD": { basePrice: 60000, drift: 0.0008, stdDev: 0.025 },
-  "ETH_USD": { basePrice: 3200, drift: 0.0007, stdDev: 0.030 },
-  "SOL_USD": { basePrice: 140, drift: 0.0012, stdDev: 0.045 },
-  "BNB_USD": { basePrice: 580, drift: 0.0009, stdDev: 0.035 },
-  "ADA_USD": { basePrice: 0.45, drift: 0.0005, stdDev: 0.040 },
-  "XRP_USD": { basePrice: 0.50, drift: 0.0004, stdDev: 0.038 },
-  "DOGE_USD": { basePrice: 0.12, drift: 0.0015, stdDev: 0.060 },
-
-  // Saham
-  "BBCA": { basePrice: 10000, drift: 0.0004, stdDev: 0.012 },
-  "BBRI": { basePrice: 4800, drift: 0.00035, stdDev: 0.015 },
-  "TLKM": { basePrice: 3200, drift: 0.0002, stdDev: 0.014 },
-  "ASII": { basePrice: 4500, drift: 0.0002, stdDev: 0.016 },
-  "AAPL": { basePrice: 210, drift: 0.0005, stdDev: 0.013 },
-  "MSFT": { basePrice: 420, drift: 0.00055, stdDev: 0.012 },
-  "GOOGL": { basePrice: 175, drift: 0.00048, stdDev: 0.014 },
-  "TSLA": { basePrice: 180, drift: 0.0007, stdDev: 0.028 },
+  // Obligasi — harga pasar per unit IDR (par Rp 1.000.000)
+  "SBR012": { basePriceIDR: 1_022_000, drift: 0.00020, stdDev: 0.0004 },
+  "ORI023": { basePriceIDR: 1_018_000, drift: 0.00022, stdDev: 0.0010 },
+  "SR018":  { basePriceIDR: 1_015_000, drift: 0.00019, stdDev: 0.0004 },
+  "FR0097": { basePriceIDR: 1_035_000, drift: 0.00023, stdDev: 0.0008 },
 };
 
-const YAHOO_TICKERS: Record<string, string> = {
-  "GOLD_OZ": "GC=F",
-  "SILVER_OZ": "SI=F",
-  "RDPT_MANULIFE": "BBCA.JK",
-  "RDPC_SCHRODER": "^JKSE",
-  "RDPS_SUCOR": "TLKM.JK",
-  "RDPU_SUCOR": "BBNI.JK",
-  "BTC_USD": "BTC-USD",
-  "ETH_USD": "ETH-USD",
-  "SOL_USD": "SOL-USD",
-  "BNB_USD": "BNB-USD",
-  "ADA_USD": "ADA-USD",
-  "XRP_USD": "XRP-USD",
-  "DOGE_USD": "DOGE-USD",
-  "BBCA": "BBCA.JK",
-  "BBRI": "BBRI.JK",
-  "TLKM": "TLKM.JK",
-  "ASII": "ASII.JK",
-  "AAPL": "AAPL",
-  "MSFT": "MSFT",
-  "GOOGL": "GOOGL",
-  "TSLA": "TSLA",
-};
+// ─── Yahoo Finance tickers — Emas sudah di-scrape langsung, Reksa Dana & Obligasi pakai simulasi
+// Tidak ada lagi kripto/saham, jadi YAHOO_TICKERS kosong untuk saat ini
+const YAHOO_TICKERS: Record<string, string> = {};
 
+// ─── Ambil kurs USD/IDR live dari Yahoo Finance ───────────────────────────────
+async function fetchUSDtoIDR(): Promise<number> {
+  try {
+    const res = await fetch(
+      "https://query1.finance.yahoo.com/v8/finance/chart/USDIDR=X?range=1d&interval=1d",
+      {
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
+        signal: AbortSignal.timeout(6000),
+      }
+    );
+    if (!res.ok) throw new Error(`Yahoo FX HTTP ${res.status}`);
+    const json = await res.json();
+    const closes = json.chart?.result?.[0]?.indicators?.quote?.[0]?.close;
+    const rate = closes?.find((v: number | null) => v !== null && v > 0);
+    if (rate && rate > 10_000 && rate < 30_000) {
+      console.log(`Kurs USD/IDR live: ${rate}`);
+      return rate;
+    }
+    throw new Error("Invalid FX rate");
+  } catch (e) {
+    console.warn(`Gagal fetch kurs USD/IDR: ${e}. Pakai fallback ${FALLBACK_USD_TO_IDR}`);
+    return FALLBACK_USD_TO_IDR;
+  }
+}
+
+// ─── Fetch historical prices dari Yahoo Finance ───────────────────────────────
 async function fetchYahooFinancePrices(ticker: string): Promise<{ date: string; price: number }[]> {
   try {
     const res = await fetch(
       `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?range=1y&interval=1d`,
       {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-        },
-        signal: AbortSignal.timeout(8000)
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
+        signal: AbortSignal.timeout(8000),
       }
     );
-    if (!res.ok) throw new Error(`Yahoo HTTP error: ${res.status}`);
+    if (!res.ok) throw new Error(`Yahoo HTTP ${res.status}`);
     const json = await res.json();
     const chart = json.chart?.result?.[0];
-    if (!chart || !chart.timestamp || !chart.indicators?.quote?.[0]?.close) {
+    if (!chart?.timestamp || !chart.indicators?.quote?.[0]?.close) {
       throw new Error(`Invalid Yahoo response for ${ticker}`);
     }
-
     const timestamps: number[] = chart.timestamp;
     const closes: (number | null)[] = chart.indicators.quote[0].close;
-
     const data: { date: string; price: number }[] = [];
     for (let i = 0; i < timestamps.length; i++) {
       const price = closes[i];
       if (price !== null && price !== undefined && price > 0) {
-        const date = new Date(timestamps[i] * 1000).toISOString().split("T")[0];
-        data.push({ date, price });
+        data.push({ date: new Date(timestamps[i] * 1000).toISOString().split("T")[0], price });
       }
     }
     return data;
   } catch (e) {
-    console.warn(`Yahoo Finance failed for ticker ${ticker}:`, e);
+    console.warn(`Yahoo Finance failed for ${ticker}:`, e);
     return [];
   }
 }
 
+// ─── Seed 365 hari historis dengan simulasi GBM mundur dari harga terkini ─────
+function generateHistoricalPrices(
+  assetId: string,
+  startPriceIDR: number,
+  spec: AssetParams,
+  now: Date,
+  source: string
+): object[] {
+  const inserts = [];
+  let currentPrice = startPriceIDR;
+  for (let i = 0; i < 365; i++) {
+    const recordedDate = new Date(now.getTime() - i * 86_400_000).toISOString().split("T")[0];
+    inserts.push({ asset_id: assetId, price: Number(currentPrice.toFixed(4)), recorded_at: recordedDate, source });
+    const dailyReturn = spec.drift + spec.stdDev * randomNormal();
+    currentPrice = currentPrice / Math.exp(dailyReturn);
+    if (currentPrice <= 0) currentPrice = startPriceIDR;
+  }
+  return inserts;
+}
+
 export async function GET(request: Request) {
   try {
-    const authHeader = request.headers.get('authorization');
-    if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const { searchParams } = new URL(request.url);
+    const forceReseed = searchParams.get("force") === "true";
+
+    // Auth: terima CRON_SECRET header ATAU user yang sudah login via Supabase
+    const authHeader = request.headers.get("authorization");
+    const hasCronSecret =
+      !!process.env.CRON_SECRET && authHeader === `Bearer ${process.env.CRON_SECRET}`;
 
     const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!hasCronSecret && !user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const today = new Date().toISOString().split("T")[0];
     const now = new Date();
     const goApiKey = process.env.GOAPI_API_KEY;
 
-    // 1. Fetch all assets
+    // 1. Fetch semua aset
     const { data: assets, error: assetsErr } = await supabase
       .from("assets")
       .select("id, symbol, name, type");
@@ -136,135 +147,171 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "No assets found in database" }, { status: 404 });
     }
 
-    // Try to get latest gold price from GoAPI if API key is set
-    let goApiAntamPrice = 0;
-    if (goApiKey) {
-      try {
-        const res = await fetch(`https://api.goapi.id/v1/gold/antam/latest?api_key=${goApiKey}`, {
-          signal: AbortSignal.timeout(5000)
-        });
-        if (res.ok) {
-          const json = await res.json();
-          if (json.status === "success" && json.data?.price) {
-            goApiAntamPrice = Number(json.data.price);
-          }
+    // 2. Fetch kurs USD/IDR live
+    const usdToIDR = await fetchUSDtoIDR();
+
+    // 3. Tentukan aset mana yang perlu direset (hapus & seed ulang)
+    const assetsToReset = new Set<string>();
+
+    if (forceReseed) {
+      assets.forEach((a) => assetsToReset.add(a.id));
+    } else {
+      // Auto-detect: cek apakah ada data USD yang disimpan tanpa konversi kurs
+      // Contoh: SILVER_OZ stored ~60 (USD value) → harusnya ~960.000 (IDR value)
+      for (const asset of assets) {
+        const spec = ASSET_SPEC[asset.symbol];
+        if (!spec) continue;
+
+        const { data: latest } = await supabase
+          .from("price_history")
+          .select("price")
+          .eq("asset_id", asset.id)
+          .order("recorded_at", { ascending: false })
+          .limit(1)
+          .single();
+
+        if (!latest) continue;
+        const latestPrice = Number(latest.price);
+
+        // Jika harga tersimpan jauh di bawah 10% dari basePriceIDR → data salah
+        if (latestPrice > 0 && latestPrice < spec.basePriceIDR * 0.1) {
+          console.log(
+            `Auto-reset ${asset.symbol}: stored=${latestPrice} << basePriceIDR=${spec.basePriceIDR} (kemungkinan USD tanpa konversi)`
+          );
+          assetsToReset.add(asset.id);
         }
-      } catch (e) {
-        console.warn("GoAPI gold fetch failed:", e);
       }
     }
 
-    // Scrape real-time gold price from emasantam.id as fallback for gold
-    let scrapedAntamPrice = goApiAntamPrice;
-    if (scrapedAntamPrice === 0) {
+    // 4. Hapus price_history untuk aset yang direset
+    if (assetsToReset.size > 0) {
+      const idsToReset = Array.from(assetsToReset);
+      const { error: deleteErr } = await supabase
+        .from("price_history")
+        .delete()
+        .in("asset_id", idsToReset);
+      if (deleteErr) throw deleteErr;
+      console.log(`Reset price_history: ${idsToReset.length} aset`);
+    }
+
+    // 5. Fetch harga emas real
+    let goldPricePerGram = 0; // dalam IDR/gram
+
+    if (goApiKey) {
+      try {
+        const res = await fetch(
+          `https://api.goapi.id/v1/gold/antam/latest?api_key=${goApiKey}`,
+          { signal: AbortSignal.timeout(5000) }
+        );
+        if (res.ok) {
+          const json = await res.json();
+          if (json.status === "success" && json.data?.price) {
+            goldPricePerGram = Number(json.data.price);
+            console.log(`GoAPI emas: Rp ${goldPricePerGram}/gram`);
+          }
+        }
+      } catch (e) {
+        console.warn("GoAPI failed:", e);
+      }
+    }
+
+    if (goldPricePerGram === 0) {
       try {
         const htmlRes = await fetch("https://emasantam.id/harga-emas-antam-harian/", {
           next: { revalidate: 0 },
-          signal: AbortSignal.timeout(6000),
-          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
+          signal: AbortSignal.timeout(8000),
+          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
         });
         if (htmlRes.ok) {
           const html = await htmlRes.text();
           const match = html.match(/var chart_data\s*=\s*(\[[\s\S]*?\]);/);
           if (match) {
             const rawData = JSON.parse(match[1]);
-            if (rawData && rawData.length > 0) {
-              scrapedAntamPrice = rawData[rawData.length - 1][1];
+            if (rawData?.length > 0) {
+              goldPricePerGram = Number(rawData[rawData.length - 1][1]);
+              console.log(`emasantam.id: Rp ${goldPricePerGram}/gram`);
             }
           }
         }
       } catch (e) {
-        console.log("emasantam.id scraping failed, using generator fallback for gold", e);
+        console.warn("emasantam.id failed:", e);
       }
     }
 
-    const allInserts: any[] = [];
+    // 6. Loop semua aset
+    const allInserts: object[] = [];
     const syncStatus: Record<string, string> = {};
 
     for (const asset of assets) {
-      const spec = ASSET_SPEC[asset.symbol] || { basePrice: 1000, drift: 0.0002, stdDev: 0.005 };
+      const spec = ASSET_SPEC[asset.symbol] ?? { basePriceIDR: 1_000, drift: 0.0002, stdDev: 0.005 };
       const yahooTicker = YAHOO_TICKERS[asset.symbol];
+      const isUSD = USD_DENOMINATED.has(asset.symbol);
 
-      // Check current price history count
-      const { count, error: countErr } = await supabase
+      const needsSeed = assetsToReset.has(asset.id);
+      const { count } = await supabase
         .from("price_history")
         .select("id", { count: "exact", head: true })
         .eq("asset_id", asset.id);
+      const isInsufficient = !count || count < 200;
 
-      if (countErr) {
-        console.error(`Error counting prices for ${asset.symbol}:`, countErr);
-        continue;
-      }
-
-      // If price history is less than 200, we need to seed the historical data
-      if (!count || count < 200) {
+      if (needsSeed || isInsufficient) {
+        // ── MODE SEEDING: isi 365 hari historis ──────────────────────────
         let historicalData: { date: string; price: number }[] = [];
 
-        // If it's a mutual fund, try Yahoo Finance first
         if (yahooTicker) {
-          console.log(`Fetching Yahoo Finance historical data for ${asset.symbol} (${yahooTicker})...`);
+          console.log(`Seeding ${asset.symbol} (${yahooTicker})...`);
           historicalData = await fetchYahooFinancePrices(yahooTicker);
         }
 
         if (historicalData.length > 0) {
-          syncStatus[asset.symbol] = `seeded_from_yahoo_finance (${historicalData.length} records)`;
+          syncStatus[asset.symbol] = `seeded_yahoo (${historicalData.length} records, usdToIDR=${isUSD ? usdToIDR : "N/A"})`;
           historicalData.forEach((d) => {
+            // Konversi ke IDR untuk aset USD
+            const priceIDR = isUSD ? d.price * usdToIDR : d.price;
             allInserts.push({
               asset_id: asset.id,
-              price: Number(d.price.toFixed(4)),
+              price: Number(priceIDR.toFixed(4)),
               recorded_at: d.date,
               source: "yahoo_finance",
             });
           });
         } else {
-          // Generate historical data using Box-Muller random walk fallback
-          syncStatus[asset.symbol] = "generated_365_days_history";
-          
-          let startPrice = spec.basePrice;
-          if (scrapedAntamPrice > 0) {
-            const goldPricePerGram = scrapedAntamPrice / 2;
-            if (asset.symbol === "ANTAM_1GR") {
-              startPrice = goldPricePerGram;
-            } else if (asset.symbol === "ANTAM_5GR") {
-              startPrice = goldPricePerGram * 5 * 0.99;
-            } else if (asset.symbol === "UBS_1GR") {
-              startPrice = goldPricePerGram * 0.985;
-            }
+          // Simulasi GBM mundur dari basePriceIDR
+          let startPriceIDR = spec.basePriceIDR;
+
+          if (goldPricePerGram > 0) {
+            if (asset.symbol === "ANTAM_1GR") startPriceIDR = goldPricePerGram;
+            else if (asset.symbol === "ANTAM_5GR") startPriceIDR = goldPricePerGram * 5 * 0.99;
+            else if (asset.symbol === "UBS_1GR") startPriceIDR = goldPricePerGram * 0.985;
           }
 
-          let currentPrice = startPrice;
-          for (let i = 0; i < 365; i++) {
-            const recordedDate = new Date(now.getTime() - i * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
-            
-            allInserts.push({
-              asset_id: asset.id,
-              price: Number(currentPrice.toFixed(4)),
-              recorded_at: recordedDate,
-              source: asset.symbol.startsWith("ANTAM") || asset.symbol.startsWith("UBS") ? (scrapedAntamPrice > 0 ? "emasantam.id" : "simulated_api") : "simulated_api",
-            });
+          const source = goldPricePerGram > 0 && asset.type === "emas"
+            ? "emasantam.id_simulated"
+            : "simulated_gbm";
 
-            const dailyReturn = spec.drift + spec.stdDev * randomNormal();
-            currentPrice = currentPrice / Math.exp(dailyReturn);
-          }
+          syncStatus[asset.symbol] = `seeded_simulation (startIDR=${startPriceIDR.toFixed(0)})`;
+          allInserts.push(...generateHistoricalPrices(asset.id, startPriceIDR, spec, now, source));
         }
       } else {
-        // Just sync today's price (Normal daily sync mode)
-        syncStatus[asset.symbol] = "synced_today";
-
-        let todayPrice = spec.basePrice;
-
-        // For mutual funds, try fetching from Yahoo Finance first to get real-time price
+        // ── MODE UPDATE HARIAN: tambah harga hari ini ─────────────────────
+        let todayPriceIDR = spec.basePriceIDR;
+        let source = "simulated_gbm";
         let yahooSuccess = false;
+
         if (yahooTicker) {
           const freshData = await fetchYahooFinancePrices(yahooTicker);
           if (freshData.length > 0) {
-            todayPrice = freshData[freshData.length - 1].price;
+            const rawPrice = freshData[freshData.length - 1].price;
+            // Konversi ke IDR jika perlu
+            todayPriceIDR = isUSD ? rawPrice * usdToIDR : rawPrice;
+            source = "yahoo_finance";
             yahooSuccess = true;
           }
         }
 
         if (!yahooSuccess) {
-          const { data: latestPriceRow } = await supabase
+          // Evolusi dari harga terakhir di DB
+          const { data: latestRow } = await supabase
             .from("price_history")
             .select("price")
             .eq("asset_id", asset.id)
@@ -272,55 +319,59 @@ export async function GET(request: Request) {
             .limit(1)
             .single();
 
-          if (latestPriceRow) {
+          if (latestRow) {
             const dailyReturn = spec.drift + spec.stdDev * randomNormal();
-            todayPrice = latestPriceRow.price * Math.exp(dailyReturn);
+            todayPriceIDR = Number(latestRow.price) * Math.exp(dailyReturn);
           }
         }
 
-        // Apply scraped or GoAPI price for gold if available
-        if (scrapedAntamPrice > 0) {
-          const goldPricePerGram = scrapedAntamPrice / 2;
+        // Override harga emas Antam dengan data real
+        if (goldPricePerGram > 0) {
           if (asset.symbol === "ANTAM_1GR") {
-            todayPrice = goldPricePerGram;
+            todayPriceIDR = goldPricePerGram;
+            source = goApiKey ? "goapi.id" : "emasantam.id";
           } else if (asset.symbol === "ANTAM_5GR") {
-            todayPrice = goldPricePerGram * 5 * 0.99;
+            todayPriceIDR = goldPricePerGram * 5 * 0.99;
+            source = goApiKey ? "goapi.id" : "emasantam.id";
           } else if (asset.symbol === "UBS_1GR") {
-            todayPrice = goldPricePerGram * 0.985;
+            todayPriceIDR = goldPricePerGram * 0.985;
+            source = goApiKey ? "goapi.id" : "emasantam.id";
           }
         }
 
+        syncStatus[asset.symbol] = `updated (Rp ${todayPriceIDR.toFixed(0)}, src=${source})`;
         allInserts.push({
           asset_id: asset.id,
-          price: Number(todayPrice.toFixed(4)),
+          price: Number(todayPriceIDR.toFixed(4)),
           recorded_at: today,
-          source: yahooTicker && yahooSuccess ? "yahoo_finance" : (asset.symbol.startsWith("ANTAM") || asset.symbol.startsWith("UBS") ? (scrapedAntamPrice > 0 ? "emasantam.id" : "simulated_api") : "simulated_api"),
+          source,
         });
       }
     }
 
-    // Upsert all gathered prices in chunks
+    // 7. Upsert ke database dalam batch
     const chunkSize = 100;
     for (let i = 0; i < allInserts.length; i += chunkSize) {
       const chunk = allInserts.slice(i, i + chunkSize);
       const { error: upsertErr } = await supabase
         .from("price_history")
         .upsert(chunk, { onConflict: "asset_id,recorded_at" });
-
-      if (upsertErr) {
-        throw upsertErr;
-      }
+      if (upsertErr) throw upsertErr;
     }
 
     return NextResponse.json({
       success: true,
-      message: "Sync prices completed successfully for all assets",
-      syncStatus,
+      usdToIDR,
+      goldPricePerGram: goldPricePerGram || null,
+      assetsReset: assetsToReset.size,
+      forced: forceReseed,
       totalRecordsSynced: allInserts.length,
       date: today,
+      syncStatus,
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal server error";
+    console.error("Sync error:", err);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

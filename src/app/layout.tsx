@@ -9,6 +9,11 @@ export const metadata: Metadata = {
   description:
     "Kelola portofolio emas, reksa dana, dan obligasi Anda dengan analisis VaR dan proyeksi compound interest.",
   keywords: ["investasi", "portofolio", "emas", "reksa dana", "obligasi", "VaR", "Indonesia"],
+  icons: {
+    icon: "/logo.png",
+    shortcut: "/logo.png",
+    apple: "/logo.png",
+  },
 };
 
 import SmoothScroll from "@/components/layout/SmoothScroll";

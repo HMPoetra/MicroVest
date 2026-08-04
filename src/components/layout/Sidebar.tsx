@@ -18,7 +18,7 @@ import {
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useCallback } from "react";
 
 const navItems = [
   { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
@@ -35,6 +35,7 @@ export default function Sidebar({ userName, logoUrl }: { userName?: string; logo
   const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<"idle" | "success" | "error">("idle");
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -45,14 +46,30 @@ export default function Sidebar({ userName, logoUrl }: { userName?: string; logo
     router.refresh();
   };
 
-  const handleSync = async () => {
+  const handleSync = useCallback(async () => {
     setSyncing(true);
+    setSyncStatus("idle");
     try {
-      await fetch("/api/prices/sync");
+      const res = await fetch("/api/prices/sync");
+      if (res.ok) {
+        setSyncStatus("success");
+        // Refresh halaman agar data harga terbaru tampil
+        router.refresh();
+        setTimeout(() => setSyncStatus("idle"), 3000);
+      } else {
+        const json = await res.json().catch(() => ({}));
+        console.error("Sync failed:", json.error ?? res.status);
+        setSyncStatus("error");
+        setTimeout(() => setSyncStatus("idle"), 4000);
+      }
+    } catch (err) {
+      console.error("Sync error:", err);
+      setSyncStatus("error");
+      setTimeout(() => setSyncStatus("idle"), 4000);
     } finally {
       setSyncing(false);
     }
-  };
+  }, [router]);
 
   const SidebarContent = ({ collapsed = false }: { collapsed?: boolean }) => (
     <div
@@ -143,19 +160,37 @@ export default function Sidebar({ userName, logoUrl }: { userName?: string; logo
           onClick={handleSync}
           disabled={syncing}
           className="btn btn-ghost btn-sm"
-          title="Sinkronisasi harga emas terbaru"
+          title={"Sinkronisasi harga terbaru"}
           style={{
             justifyContent: collapsed ? "center" : "flex-start",
             gap: collapsed ? 0 : 10,
             padding: collapsed ? "10px 0" : "10px 12px",
             borderRadius: 10,
             fontSize: "0.85rem",
-            color: "hsl(var(--text-secondary))",
+            color:
+              syncStatus === "success"
+                ? "hsl(var(--primary))"
+                : syncStatus === "error"
+                ? "hsl(var(--danger))"
+                : "hsl(var(--text-secondary))",
             width: "100%",
+            transition: "color 0.3s ease",
           }}
         >
-          <RefreshCw size={16} className={syncing ? "animate-spin" : ""} style={{ flexShrink: 0 }} />
-          {!collapsed && (syncing ? "Sinkronisasi..." : "Sync Harga")}
+          <RefreshCw
+            size={16}
+            className={syncing ? "animate-spin" : ""}
+            style={{ flexShrink: 0 }}
+          />
+          {!collapsed && (
+            syncing
+              ? "Sinkronisasi..."
+              : syncStatus === "success"
+              ? "✓ Berhasil!"
+              : syncStatus === "error"
+              ? "✗ Gagal sync"
+              : "Sync Harga"
+          )}
         </button>
 
         <hr className="divider" style={{ margin: collapsed ? "8px 0" : "16px 0" }} />
