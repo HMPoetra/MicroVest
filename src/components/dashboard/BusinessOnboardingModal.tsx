@@ -1,16 +1,30 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Building2, UploadCloud } from "lucide-react";
+import { Building2, UploadCloud, X } from "lucide-react";
 
 export default function BusinessOnboardingModal({ userId }: { userId: string }) {
   const router = useRouter();
+  const [dismissed, setDismissed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [file, setFile] = useState<File | null>(null);
+
+  const STORAGE_KEY = `mv_onboarding_skipped_${userId}`;
+
+  useEffect(() => {
+    if (localStorage.getItem(STORAGE_KEY) === "true") {
+      setDismissed(true);
+    }
+  }, [STORAGE_KEY]);
+
+  const handleSkip = () => {
+    localStorage.setItem(STORAGE_KEY, "true");
+    setDismissed(true);
+  };
 
   const [formData, setFormData] = useState({
     name: "",
@@ -83,18 +97,30 @@ export default function BusinessOnboardingModal({ userId }: { userId: string }) 
     }
   };
 
+  if (dismissed) return null;
+
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
       <div className="bg-[#1c1c1c] border border-[hsl(var(--border))] rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden my-8 animate-fade-in-up">
         <div className="p-6 md:p-8">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400">
-              <Building2 size={24} />
+          <div className="flex items-start justify-between gap-3 mb-6">
+            <div className="flex items-center gap-3">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400">
+                <Building2 size={24} />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold text-white">Profil Bisnis</h2>
+                <p className="text-sm text-slate-400">Silakan lengkapi data usaha Anda terlebih dahulu.</p>
+              </div>
             </div>
-            <div>
-              <h2 className="text-xl font-bold text-white">Profil Bisnis</h2>
-              <p className="text-sm text-slate-400">Silakan lengkapi data usaha Anda terlebih dahulu.</p>
-            </div>
+            <button
+              type="button"
+              onClick={handleSkip}
+              className="flex-shrink-0 text-slate-500 hover:text-slate-300 transition-colors mt-1"
+              title="Lewati"
+            >
+              <X size={20} />
+            </button>
           </div>
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -183,6 +209,13 @@ export default function BusinessOnboardingModal({ userId }: { userId: string }) 
             <Button type="submit" disabled={loading} className="mt-2 w-full bg-emerald-500 hover:bg-emerald-600 text-white border-0 py-6 text-md font-bold rounded-xl">
               {loading ? "Menyimpan Data..." : "Simpan & Lanjutkan"}
             </Button>
+            <button
+              type="button"
+              onClick={handleSkip}
+              className="w-full text-center text-sm text-slate-500 hover:text-slate-300 transition-colors py-2"
+            >
+              Lewati, isi nanti
+            </button>
           </form>
         </div>
       </div>

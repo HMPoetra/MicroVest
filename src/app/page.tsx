@@ -2,7 +2,6 @@ import Link from "next/link";
 import { TrendingUp, Shield, BarChart2, ArrowRight, Star, ChevronRight } from "lucide-react";
 import Particles from "@/components/ui/Particles";
 import LandingHeader from "@/components/layout/LandingHeader";
-import LogoLoop from "@/components/ui/LogoLoop";
 import { createClient } from "@/lib/supabase/server";
 import RealtimeUserCounter from "@/components/ui/RealtimeUserCounter";
 import type { Metadata } from "next";
@@ -95,10 +94,6 @@ export default async function HomePage() {
     },
   ];
 
-  const { data: businesses } = await supabase
-    .from("businesses")
-    .select("name, logo_url")
-    .not("logo_url", "is", null);
 
   return (
     <div className="min-h-screen">
@@ -231,30 +226,6 @@ export default async function HomePage() {
         </div>
       </section>
 
-      {/* Logos Section */}
-      {businesses && businesses.length > 0 && (
-        <section className="py-16 border-t border-slate-100 bg-white overflow-hidden">
-          <div className="max-w-7xl mx-auto px-6 text-center mb-10">
-            <p className="text-sm font-semibold text-slate-400 uppercase tracking-widest">
-              Dipercaya oleh Berbagai Bisnis
-            </p>
-          </div>
-          <div className="w-full">
-            <LogoLoop
-              logos={businesses.map((b) => ({ src: b.logo_url, alt: b.name, title: b.name }))}
-              speed={50}
-              direction="left"
-              logoHeight={40}
-              gap={60}
-              hoverSpeed={0}
-              scaleOnHover
-              fadeOut
-              fadeOutColor="#ffffff"
-              ariaLabel="Dipercaya oleh Berbagai Bisnis"
-            />
-          </div>
-        </section>
-      )}
 
       {/* Contact */}
       <section id="contact" className="py-24 px-6 bg-slate-50">
