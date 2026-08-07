@@ -103,6 +103,7 @@ export interface CompoundParams {
 export interface CompoundProjection {
   period: number;
   label: string;
+  sub_label?: string;
   value: number;
   interest_earned: number;
   total_contributed: number;
@@ -114,6 +115,7 @@ export interface CompoundResult {
   total_contributed: number;
   effective_rate: number;
   projection: CompoundProjection[];
+  periodic_projection?: CompoundProjection[];
 }
 
 export interface Simulation {

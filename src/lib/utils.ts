@@ -6,8 +6,9 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-// Format currency to IDR
+// Format currency to IDR (e.g. 13000000 -> "Rp 13.000.000")
 export function formatIDR(value: number, compact = false): string {
+  if (value === undefined || value === null || isNaN(value)) return "Rp 0";
   if (compact) {
     if (Math.abs(value) >= 1_000_000_000) {
       return `Rp ${(value / 1_000_000_000).toFixed(1)}M`;
@@ -19,12 +20,25 @@ export function formatIDR(value: number, compact = false): string {
       return `Rp ${(value / 1_000).toFixed(0)}rb`;
     }
   }
-  return new Intl.NumberFormat("id-ID", {
-    style: "currency",
-    currency: "IDR",
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(value);
+  const isNegative = value < 0;
+  const absVal = Math.abs(Math.round(value));
+  const formatted = new Intl.NumberFormat("id-ID").format(absVal);
+  return isNegative ? `-Rp ${formatted}` : `Rp ${formatted}`;
+}
+
+// Format raw number or numeric string with Indonesian dot thousand separator (e.g. 10000000 -> "10.000.000")
+export function formatNumberSeparator(value: number | string | undefined | null): string {
+  if (value === undefined || value === null || value === "") return "";
+  const numStr = String(value).replace(/\D/g, "");
+  if (!numStr) return "";
+  return new Intl.NumberFormat("id-ID").format(Number(numStr));
+}
+
+// Parse formatted string with thousand separators back to raw number (e.g. "10.000.000" -> 10000000)
+export function parseNumberSeparator(value: string): number {
+  if (!value) return 0;
+  const raw = value.replace(/\D/g, "");
+  return raw ? Number(raw) : 0;
 }
 
 // Format percentage

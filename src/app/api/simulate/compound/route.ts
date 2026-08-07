@@ -19,14 +19,17 @@ export async function POST(req: NextRequest) {
       annual_rate,
       tenor_years,
       frequency,
+      custom_frequency,
       additional_monthly = 0,
       portfolio_id,
       use_dynamic = false,
       custom_holdings,
+      save = false,
+      label,
     } = body;
 
     // Validate basic inputs
-    if (!principal || !tenor_years || !frequency) {
+    if (principal === undefined || !tenor_years || !frequency) {
       return NextResponse.json({ error: "Parameter tidak lengkap" }, { status: 400 });
     }
     if (principal <= 0 || tenor_years <= 0) {
@@ -184,28 +187,37 @@ export async function POST(req: NextRequest) {
       }
     } else {
       // Validate rate for static case
-      if (annual_rate === undefined || annual_rate <= 0) {
-        return NextResponse.json({ error: "Suku bunga tahunan statis harus positif" }, { status: 400 });
+      if (annual_rate === undefined || annual_rate < 0) {
+        return NextResponse.json({ error: "Suku bunga tahunan statis tidak boleh negatif" }, { status: 400 });
       }
     }
 
     const result = computeCompoundInterest({
       principal,
-      annual_rate: annual_rate ? annual_rate : 0.08, // fallback or ignored if dynamic
+      annual_rate: annual_rate !== undefined ? annual_rate : 0.08,
       tenor_years,
       frequency,
+      custom_frequency,
       additional_monthly,
       dynamic_rates,
     });
 
-    // Save simulation if linked to portfolio in DB
-    if (portfolio_id && portfolio_id !== "custom") {
+    // Save simulation result if explicitly requested
+    if (save) {
       await supabase.from("simulations").insert({
-        portfolio_id,
+        portfolio_id: portfolio_id && portfolio_id !== "custom" ? portfolio_id : null,
         user_id: user.id,
         type: "compound_interest",
         params: body,
-        result,
+        result: {
+          final_value: result.final_value,
+          total_interest: result.total_interest,
+          total_contributed: result.total_contributed,
+          effective_rate: result.effective_rate,
+          projection: result.projection,
+          periodic_projection: result.periodic_projection,
+        },
+        label: label || null,
       });
     }
 

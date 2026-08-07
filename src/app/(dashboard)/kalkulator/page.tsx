@@ -1,14 +1,59 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { Calculator, TrendingUp, Info, AlertTriangle, ChevronDown, HelpCircle } from "lucide-react";
+import {
+  Calculator, TrendingUp, Info, AlertTriangle, ChevronDown, HelpCircle,
+  Sparkles, Save, Trash2, BarChart2, X, Check, Award, ThumbsUp, ShieldCheck
+} from "lucide-react";
 import {
   XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Legend, Area, AreaChart
+  ResponsiveContainer, Legend, Area, AreaChart, BarChart, Bar, Cell
 } from "recharts";
-import { formatIDR, formatPct } from "@/lib/utils";
+import { formatIDR, formatPct, formatNumberSeparator, parseNumberSeparator, formatDateShort } from "@/lib/utils";
+import { computeCompoundInterest } from "@/lib/engines";
 import type { CompoundResult } from "@/types";
+
+// ─── History record type ──────────────────────────────────────────────────────
+interface CompoundHistoryRecord {
+  id: string;
+  label: string | null;
+  params: {
+    principal: number;
+    annual_rate?: number;
+    tenor_years: number;
+    frequency: string;
+    custom_frequency?: number;
+    additional_monthly?: number;
+    use_dynamic?: boolean;
+    portfolio_id?: string;
+    [key: string]: unknown;
+  };
+  result: {
+    final_value: number;
+    total_interest: number;
+    total_contributed: number;
+    effective_rate: number;
+    projection: Array<{
+      period: number;
+      label: string;
+      sub_label?: string;
+      value: number;
+      interest_earned: number;
+      total_contributed: number;
+    }>;
+    periodic_projection?: Array<{
+      period: number;
+      label: string;
+      sub_label?: string;
+      value: number;
+      interest_earned: number;
+      total_contributed: number;
+    }>;
+  };
+  created_at: string;
+  portfolio: { name: string } | null;
+}
 
 // ─── Tooltip "?" kecil ────────────────────────────────────────────
 function InfoTooltip({ text }: { text: string }) {
@@ -72,13 +117,16 @@ const FREQ_OPTIONS = [
 ];
 
 export default function KalkulatorPage() {
-  const [principal, setPrincipal] = useState(10000000);
-  const [annualRate, setAnnualRate] = useState(8);
-  const [tenorYears, setTenorYears] = useState(10);
+  const [principal, setPrincipal] = useState(0);
+  const [annualRate, setAnnualRate] = useState(0);
+  const [tenorYears, setTenorYears] = useState(0);
   const [frequency, setFrequency] = useState("monthly");
   const [customFrequency, setCustomFrequency] = useState<number>(2);
   const [additionalMonthly, setAdditionalMonthly] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [viewMode, setViewMode] = useState<"yearly" | "periodic">("yearly");
+  const currentYear = new Date().getFullYear();
+
   const [result, setResult] = useState<CompoundResult | null>(null);
   const [error, setError] = useState("");
 
@@ -88,6 +136,94 @@ export default function KalkulatorPage() {
   const [portfolioId, setPortfolioId] = useState("");
   const [availableAssets, setAvailableAssets] = useState<{ id: string; name: string; type: string; symbol: string }[]>([]);
   const [weights, setWeights] = useState<Record<string, number>>({});
+
+  // History & Save states
+  const [saving, setSaving] = useState(false);
+  const [saveLabel, setSaveLabel] = useState("");
+  const [savedMsg, setSavedMsg] = useState("");
+  const [history, setHistory] = useState<CompoundHistoryRecord[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showCompare, setShowCompare] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // History fetch
+  const fetchHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const res = await fetch("/api/simulate/compound/history");
+      const json = await res.json();
+      if (json.data) setHistory(json.data);
+    } catch { /* ignore */ }
+    setHistoryLoading(false);
+  }, []);
+
+  useEffect(() => {
+    fetchHistory();
+  }, [fetchHistory]);
+
+  const handleSave = async () => {
+    if (!result) return;
+    setSaving(true);
+    setSavedMsg("");
+
+    const customHoldings = Object.entries(weights)
+      .filter(([_, w]) => w > 0)
+      .map(([assetId, w]) => ({ asset_id: assetId, weight: w / 100 }));
+
+    try {
+      await fetch("/api/simulate/compound", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          principal,
+          annual_rate: rateType === "static" ? annualRate / 100 : undefined,
+          tenor_years: tenorYears,
+          frequency,
+          custom_frequency: frequency === "custom" ? customFrequency : undefined,
+          additional_monthly: additionalMonthly,
+          portfolio_id: rateType === "dynamic" ? portfolioId : undefined,
+          use_dynamic: rateType === "dynamic",
+          custom_holdings: rateType === "dynamic" && portfolioId === "custom" ? customHoldings : undefined,
+          save: true,
+          label: saveLabel || null,
+        }),
+      });
+
+      setSavedMsg("✓ Tersimpan ke Riwayat!");
+      setSaveLabel("");
+      fetchHistory();
+      setTimeout(() => setSavedMsg(""), 3000);
+    } catch {
+      // ignore
+    }
+    setSaving(false);
+  };
+
+  const handleDeleteHistory = async (id: string) => {
+    setDeletingId(id);
+    await fetch("/api/simulate/compound/history", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    setDeletingId(null);
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    fetchHistory();
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   useEffect(() => {
     const supabase = createClient();
@@ -123,10 +259,57 @@ export default function KalkulatorPage() {
     loadAssets();
   }, []);
 
-  const totalWeight = Object.values(weights).reduce((a, b) => a + b, 0);
+  const totalWeight = useMemo(() => Object.values(weights).reduce((a, b) => a + b, 0), [weights]);
+
+  // Live calculation for static rate (only when user has provided inputs)
+  useEffect(() => {
+    if (rateType === "static") {
+      if ((principal <= 0 && additionalMonthly <= 0) || tenorYears <= 0) {
+        setResult(null);
+        return;
+      }
+      try {
+        const res = computeCompoundInterest({
+          principal: Math.max(0, principal),
+          annual_rate: Math.max(0, annualRate) / 100,
+          tenor_years: Math.max(1, tenorYears),
+          frequency,
+          custom_frequency: customFrequency,
+          additional_monthly: Math.max(0, additionalMonthly),
+        });
+        setResult(res);
+        setError("");
+      } catch (err: any) {
+        setError(err?.message || "Gagal menghitung proyeksi.");
+      }
+    }
+  }, [rateType, principal, annualRate, tenorYears, frequency, customFrequency, additionalMonthly]);
 
   const handleCalculate = useCallback(async () => {
-    setLoading(true); setError(""); setResult(null);
+    if (principal <= 0 && additionalMonthly <= 0) {
+      setError("Silakan masukkan Modal Awal atau Setoran Bulanan lebih dari 0.");
+      return;
+    }
+    if (tenorYears <= 0) {
+      setError("Silakan tentukan Jangka Waktu investasi minimal 1 tahun.");
+      return;
+    }
+
+    if (rateType === "static") {
+      const res = computeCompoundInterest({
+        principal: Math.max(0, principal),
+        annual_rate: Math.max(0, annualRate) / 100,
+        tenor_years: Math.max(1, tenorYears),
+        frequency,
+        custom_frequency: customFrequency,
+        additional_monthly: Math.max(0, additionalMonthly),
+      });
+      setResult(res);
+      setError("");
+      return;
+    }
+
+    setLoading(true); setError("");
 
     const customHoldings = Object.entries(weights)
       .filter(([_, w]) => w > 0)
@@ -135,25 +318,33 @@ export default function KalkulatorPage() {
         weight: w / 100,
       }));
 
-    const res = await fetch("/api/simulate/compound", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        principal,
-        annual_rate: rateType === "static" ? annualRate / 100 : undefined,
-        tenor_years: tenorYears,
-        frequency: frequency === "custom" ? "custom" : frequency,
-        custom_frequency: frequency === "custom" ? customFrequency : undefined,
-        additional_monthly: additionalMonthly,
-        use_dynamic: rateType === "dynamic",
-        portfolio_id: rateType === "dynamic" ? portfolioId : undefined,
-        custom_holdings: rateType === "dynamic" && portfolioId === "custom" ? customHoldings : undefined,
-      }),
-    });
-    const json = await res.json();
-    if (!res.ok || json.error) { setError(json.error ?? "Terjadi kesalahan."); }
-    else { setResult(json.data); }
-    setLoading(false);
+    try {
+      const res = await fetch("/api/simulate/compound", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          principal: Math.max(0, principal),
+          annual_rate: annualRate / 100,
+          tenor_years: tenorYears,
+          frequency: frequency === "custom" ? "custom" : frequency,
+          custom_frequency: frequency === "custom" ? customFrequency : undefined,
+          additional_monthly: additionalMonthly,
+          use_dynamic: rateType === "dynamic",
+          portfolio_id: rateType === "dynamic" ? portfolioId : undefined,
+          custom_holdings: rateType === "dynamic" && portfolioId === "custom" ? customHoldings : undefined,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || json.error) {
+        setError(json.error ?? "Terjadi kesalahan saat menghitung return dinamis.");
+      } else {
+        setResult(json.data);
+      }
+    } catch (e: any) {
+      setError("Gagal terhubung ke server. Silakan coba kembali.");
+    } finally {
+      setLoading(false);
+    }
   }, [principal, annualRate, tenorYears, frequency, customFrequency, additionalMonthly, rateType, portfolioId, weights]);
 
   const inputRow = (
@@ -165,35 +356,56 @@ export default function KalkulatorPage() {
     suffix?: string,
     min = 0,
     max = 100000000000
-  ) => (
-    <div>
-      <label htmlFor={id} style={{ display: "block", fontSize: "0.82rem", fontWeight: 600, color: "hsl(var(--text-primary))", marginBottom: 6 }}>
-        {label}
-      </label>
-      <div style={{ position: "relative" }}>
-        {prefix && (
-          <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "hsl(var(--text-muted))", fontSize: "0.85rem" }}>
-            {prefix}
-          </span>
+  ) => {
+    const isCurrency = prefix === "Rp";
+    return (
+      <div>
+        {label && (
+          <label htmlFor={id} style={{ display: "block", fontSize: "0.82rem", fontWeight: 600, color: "hsl(var(--text-primary))", marginBottom: 6 }}>
+            {label}
+          </label>
         )}
-        <input
-          id={id}
-          type="number"
-          className="input-base"
-          style={{ paddingLeft: prefix ? 40 : 14, paddingRight: suffix ? 44 : 14 }}
-          value={value}
-          min={min}
-          max={max}
-          onChange={(e) => onChange(Number(e.target.value))}
-        />
-        {suffix && (
-          <span style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", color: "hsl(var(--text-muted))", fontSize: "0.85rem" }}>
-            {suffix}
-          </span>
-        )}
+        <div style={{ position: "relative" }}>
+          {prefix && (
+            <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "hsl(var(--text-muted))", fontSize: "0.85rem", pointerEvents: "none" }}>
+              {prefix}
+            </span>
+          )}
+          {isCurrency ? (
+            <input
+              id={id}
+              type="text"
+              inputMode="numeric"
+              className="input-base"
+              style={{ paddingLeft: prefix ? 40 : 14, paddingRight: suffix ? 44 : 14 }}
+              value={formatNumberSeparator(value)}
+              onChange={(e) => {
+                const parsed = parseNumberSeparator(e.target.value);
+                onChange(Math.min(max, Math.max(min, parsed)));
+              }}
+              placeholder="0"
+            />
+          ) : (
+            <input
+              id={id}
+              type="number"
+              className="input-base"
+              style={{ paddingLeft: prefix ? 40 : 14, paddingRight: suffix ? 44 : 14 }}
+              value={value}
+              min={min}
+              max={max}
+              onChange={(e) => onChange(Number(e.target.value))}
+            />
+          )}
+          {suffix && (
+            <span style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", color: "hsl(var(--text-muted))", fontSize: "0.85rem", pointerEvents: "none" }}>
+              {suffix}
+            </span>
+          )}
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="animate-fade-in-up w-full flex-1">
@@ -262,19 +474,19 @@ export default function KalkulatorPage() {
 
           {rateType === "static" ? (
             <div>
-            <label htmlFor="ci-rate" style={{ display: "flex", alignItems: "center", fontSize: "0.82rem", fontWeight: 600, color: "hsl(var(--text-primary))", marginBottom: 6 }}>
-              Suku Bunga Tahunan: <span style={{ color: "hsl(var(--primary))", marginLeft: 4 }}>{annualRate}%</span>
-              <InfoTooltip text="Persentase keuntungan yang Anda dapatkan dalam 1 tahun. Contoh: deposito bank biasanya 4-7%, reksa dana bisa 8-15% per tahun, saham bervariasi lebih besar." />
-            </label>
+              <label htmlFor="ci-rate" style={{ display: "flex", alignItems: "center", fontSize: "0.82rem", fontWeight: 600, color: "hsl(var(--text-primary))", marginBottom: 6 }}>
+                Suku Bunga Tahunan: <span style={{ color: "hsl(var(--primary))", marginLeft: 4 }}>{annualRate}%</span>
+                <InfoTooltip text="Persentase keuntungan yang Anda dapatkan dalam 1 tahun. Contoh: deposito bank biasanya 4-7%, reksa dana bisa 8-15% per tahun, saham bervariasi lebih besar." />
+              </label>
               <input
                 id="ci-rate"
-                type="range" min={1} max={30} step={0.5}
+                type="range" min={0} max={30} step={0.5}
                 value={annualRate}
                 onChange={(e) => setAnnualRate(Number(e.target.value))}
                 style={{ width: "100%", accentColor: "hsl(var(--primary))" }}
               />
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", color: "hsl(var(--text-muted))", marginTop: 2 }}>
-                <span>1%</span><span>30%</span>
+                <span>0%</span><span>30%</span>
               </div>
             </div>
           ) : (
@@ -345,13 +557,13 @@ export default function KalkulatorPage() {
             </label>
             <input
               id="ci-tenor"
-              type="range" min={1} max={50} step={1}
+              type="range" min={0} max={50} step={1}
               value={tenorYears}
               onChange={(e) => setTenorYears(Number(e.target.value))}
               style={{ width: "100%", accentColor: "hsl(var(--primary))" }}
             />
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", color: "hsl(var(--text-muted))", marginTop: 2 }}>
-              <span>1 tahun</span><span>50 tahun</span>
+              <span>0 tahun</span><span>50 tahun</span>
             </div>
           </div>
 
@@ -450,21 +662,21 @@ export default function KalkulatorPage() {
                 {[
                   {
                     label: "Nilai Akhir",
-                    value: formatIDR(result.final_value, true),
+                    value: formatIDR(result.final_value),
                     color: "hsl(var(--primary))",
-                    sub: `Dalam {tenorYears} tahun`,
+                    sub: `Dalam ${tenorYears} Tahun (${currentYear} – ${currentYear + tenorYears})`,
                   },
                   {
                     label: "Total Bunga",
-                    value: formatIDR(result.total_interest, true),
+                    value: formatIDR(result.total_interest),
                     color: "hsl(var(--accent))",
-                    sub: `${((result.total_interest / result.total_contributed) * 100).toFixed(1)}% dari modal`,
+                    sub: `${((result.total_interest / Math.max(1, result.total_contributed)) * 100).toFixed(1)}% dari modal`,
                   },
                   {
                     label: "Total Modal",
-                    value: formatIDR(result.total_contributed, true),
+                    value: formatIDR(result.total_contributed),
                     color: "hsl(var(--text-primary))",
-                    sub: rateType === "static" 
+                    sub: rateType === "static"
                       ? `Rate efektif: ${(result.effective_rate * 100).toFixed(2)}%/thn`
                       : `Rata-rata rate: ${(result.effective_rate * 100).toFixed(2)}%/thn`,
                   },
@@ -487,11 +699,33 @@ export default function KalkulatorPage() {
               <div className="card py-4 sm:py-0 overflow-hidden">
                 <div className="flex flex-col items-stretch border-b border-[hsl(var(--border))] sm:flex-row p-0">
                   <div className="flex flex-1 flex-col justify-center gap-1 px-6 pb-3 sm:pb-0 py-4">
-                    <h3 className="font-bold text-lg text-[hsl(var(--text-primary))]">
-                      Grafik Pertumbuhan Uang Anda {rateType === "dynamic" && "(Dinamis)"}
-                    </h3>
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <h3 className="font-bold text-lg text-[hsl(var(--text-primary))]">
+                        Grafik Pertumbuhan Uang Anda {rateType === "dynamic" && "(Dinamis)"}
+                      </h3>
+                      {result.periodic_projection && result.periodic_projection.length > 0 && (
+                        <div className="flex items-center gap-1.5 bg-[hsl(var(--bg-base))] p-1 rounded-lg border border-[hsl(var(--border))]">
+                          <button
+                            type="button"
+                            onClick={() => setViewMode("yearly")}
+                            className={viewMode === "yearly" ? "btn btn-primary btn-sm" : "btn btn-secondary btn-sm"}
+                            style={{ fontSize: "0.72rem", padding: "4px 8px", height: "auto" }}
+                          >
+                            Tahunan ({tenorYears} Thn)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setViewMode("periodic")}
+                            className={viewMode === "periodic" ? "btn btn-primary btn-sm" : "btn btn-secondary btn-sm"}
+                            style={{ fontSize: "0.72rem", padding: "4px 8px", height: "auto" }}
+                          >
+                            {frequency === "monthly" ? "Per Bulan" : frequency === "quarterly" ? "Per Triwulan" : frequency === "daily" ? "Per Hari" : "Per Frekuensi"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
                     <p className="text-sm text-[hsl(var(--text-secondary))]">
-                      Menampilkan proyeksi nilai investasi berdasarkan {rateType === "static" ? "keuntungan tetap" : "keuntungan historis berfluktuasi"}
+                      Menampilkan proyeksi nilai investasi selama {tenorYears} tahun ({currentYear} – {currentYear + tenorYears}) berdasarkan {rateType === "static" ? "keuntungan tetap" : "keuntungan historis dinamis"}
                     </p>
                   </div>
                   <div className="flex">
@@ -501,8 +735,8 @@ export default function KalkulatorPage() {
                       <span className="text-xs text-[hsl(var(--text-muted))]">
                         Nilai Akhir
                       </span>
-                      <span className="text-lg leading-none font-bold sm:text-3xl text-[hsl(var(--primary))] truncate max-w-[200px]">
-                        {formatIDR(result.final_value, true)}
+                      <span className="text-lg leading-none font-bold sm:text-2xl text-[hsl(var(--primary))] truncate">
+                        {formatIDR(result.final_value)}
                       </span>
                     </button>
                     <button
@@ -511,8 +745,8 @@ export default function KalkulatorPage() {
                       <span className="text-xs text-[hsl(var(--text-muted))]">
                         Total Modal
                       </span>
-                      <span className="text-lg leading-none font-bold sm:text-3xl text-[hsl(var(--accent))] truncate max-w-[200px]">
-                        {formatIDR(result.total_contributed, true)}
+                      <span className="text-lg leading-none font-bold sm:text-2xl text-[hsl(var(--accent))] truncate">
+                        {formatIDR(result.total_contributed)}
                       </span>
                     </button>
                   </div>
@@ -520,7 +754,10 @@ export default function KalkulatorPage() {
                 <div className="p-4 sm:p-6 mt-2">
                   <div className="aspect-auto h-[250px] w-full">
                     <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={result.projection} margin={{ top: 4, right: 20, bottom: 0, left: 0 }}>
+                      <AreaChart
+                        data={(viewMode === "periodic" && result.periodic_projection) ? result.periodic_projection : result.projection}
+                        margin={{ top: 4, right: 20, bottom: 0, left: 0 }}
+                      >
                         <defs>
                           <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
                             <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.25} />
@@ -532,13 +769,13 @@ export default function KalkulatorPage() {
                           </linearGradient>
                         </defs>
                         <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                        <XAxis 
-                          dataKey="label" 
-                          tick={{ fontSize: 12, fill: "hsl(var(--text-muted))" }} 
+                        <XAxis
+                          dataKey="label"
+                          tick={{ fontSize: 12, fill: "hsl(var(--text-muted))" }}
                           tickLine={false}
                           axisLine={false}
                           tickMargin={12}
-                          interval={Math.max(0, Math.floor(result.projection.length / 6))} 
+                          interval={Math.max(0, Math.floor(((viewMode === "periodic" && result.periodic_projection) ? result.periodic_projection : result.projection).length / 6))}
                         />
                         <YAxis
                           tick={{ fontSize: 12, fill: "hsl(var(--text-muted))" }}
@@ -550,7 +787,7 @@ export default function KalkulatorPage() {
                         />
                         <Tooltip
                           contentStyle={{ background: "hsl(var(--bg-surface))", border: "1px solid hsl(var(--border))", borderRadius: 8, color: "hsl(var(--text-primary))", fontSize: "0.82rem", boxShadow: "0 4px 12px rgba(0,0,0,0.05)" }}
-                          formatter={(v, name) => [formatIDR(Number(v), true), name === "value" ? "Total Nilai" : "Total Modal"]}
+                          formatter={(v, name) => [formatIDR(Number(v)), name === "value" ? "Total Nilai" : "Total Modal"]}
                         />
                         <Legend formatter={(v) => <span style={{ color: "hsl(var(--text-secondary))", fontSize: "0.78rem" }}>{v === "value" ? "Total Nilai" : "Total Modal"}</span>} />
                         <Area type="monotone" dataKey="total_contributed" stroke="hsl(var(--accent))" fill="url(#colorContrib)" strokeWidth={2} dot={false} />
@@ -563,37 +800,534 @@ export default function KalkulatorPage() {
 
               {/* Projection table */}
               <div className="card" style={{ overflow: "hidden" }}>
-                <div style={{ padding: "14px 20px", borderBottom: "1px solid hsl(var(--border))" }}>
-                  <h3 style={{ fontWeight: 700, fontSize: "0.9rem", color: "hsl(var(--text-primary))" }}>Rincian Pertumbuhan per Periode</h3>
+                <div style={{ padding: "14px 20px", borderBottom: "1px solid hsl(var(--border))", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                  <div>
+                    <h3 style={{ fontWeight: 700, fontSize: "0.9rem", color: "hsl(var(--text-primary))" }}>
+                      Rincian Pertumbuhan per Periode ({viewMode === "yearly" ? `Tahunan: ${tenorYears} Tahun (${currentYear} – ${currentYear + tenorYears})` : `Rincian ${frequency === "monthly" ? "Bulanan" : frequency === "quarterly" ? "Triwulanan" : "Frekuensi"}`})
+                    </h3>
+                    <p style={{ fontSize: "0.76rem", color: "hsl(var(--text-muted))", marginTop: 2 }}>
+                      Melihat kronologi penambahan modal dan akumulasi bunga berbunga
+                    </p>
+                  </div>
+                  {result.periodic_projection && result.periodic_projection.length > 0 && (
+                    <div className="flex items-center gap-1.5 bg-[hsl(var(--bg-base))] p-1 rounded-lg border border-[hsl(var(--border))]">
+                      <button
+                        type="button"
+                        onClick={() => setViewMode("yearly")}
+                        className={viewMode === "yearly" ? "btn btn-primary btn-sm" : "btn btn-secondary btn-sm"}
+                        style={{ fontSize: "0.72rem", padding: "4px 8px", height: "auto" }}
+                      >
+                        Tahunan
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setViewMode("periodic")}
+                        className={viewMode === "periodic" ? "btn btn-primary btn-sm" : "btn btn-secondary btn-sm"}
+                        style={{ fontSize: "0.72rem", padding: "4px 8px", height: "auto" }}
+                      >
+                        {frequency === "monthly" ? "Per Bulan" : frequency === "quarterly" ? "Per Triwulan" : "Per Frekuensi"}
+                      </button>
+                    </div>
+                  )}
                 </div>
-                <div style={{ overflowX: "auto" }}>
+                <div style={{ overflowX: "auto", maxHeight: 420 }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.83rem" }}>
-                    <thead>
+                    <thead style={{ position: "sticky", top: 0, zIndex: 10 }}>
                       <tr style={{ background: "hsl(var(--bg-base))" }}>
-                        {["Periode", "Total Nilai", "Total Modal", "Bunga Kumulatif"].map((h) => (
-                          <th key={h} style={{ padding: "10px 16px", textAlign: "right", fontSize: "0.72rem", fontWeight: 600, color: "hsl(var(--text-secondary))", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                            {h}
-                          </th>
-                        ))}
+                        <th style={{ padding: "10px 16px", textAlign: "left", fontSize: "0.72rem", fontWeight: 600, color: "hsl(var(--text-secondary))", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                          Periode
+                        </th>
+                        <th style={{ padding: "10px 16px", textAlign: "left", fontSize: "0.72rem", fontWeight: 600, color: "hsl(var(--text-secondary))", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                          Masa Waktu
+                        </th>
+                        <th style={{ padding: "10px 16px", textAlign: "right", fontSize: "0.72rem", fontWeight: 600, color: "hsl(var(--text-secondary))", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                          Total Nilai
+                        </th>
+                        <th style={{ padding: "10px 16px", textAlign: "right", fontSize: "0.72rem", fontWeight: 600, color: "hsl(var(--text-secondary))", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                          Total Modal
+                        </th>
+                        <th style={{ padding: "10px 16px", textAlign: "right", fontSize: "0.72rem", fontWeight: 600, color: "hsl(var(--text-secondary))", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                          Bunga Kumulatif
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
-                      {result.projection.map((row, i) => (
+                      {((viewMode === "periodic" && result.periodic_projection) ? result.periodic_projection : result.projection).map((row, i) => (
                         <tr key={i} style={{ borderBottom: "1px solid hsl(var(--border))" }}>
-                          <td style={{ padding: "10px 16px", color: "hsl(var(--text-primary))", fontWeight: 500 }}>{row.label}</td>
-                          <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: "hsl(var(--primary))" }}>{formatIDR(row.value)}</td>
-                          <td style={{ padding: "10px 16px", textAlign: "right", color: "hsl(var(--accent))" }}>{formatIDR(row.total_contributed)}</td>
-                          <td style={{ padding: "10px 16px", textAlign: "right", color: "hsl(var(--text-muted))" }}>{formatIDR(row.interest_earned)}</td>
+                          <td style={{ padding: "10px 16px", color: "hsl(var(--text-primary))", fontWeight: 600 }}>
+                            {row.label}
+                          </td>
+                          <td style={{ padding: "10px 16px", color: "hsl(var(--text-muted))", fontSize: "0.78rem" }}>
+                            {row.sub_label || (row.period === 0 ? "Awal Investasi" : `Tahun ke-${row.period}`)}
+                          </td>
+                          <td style={{ padding: "10px 16px", textAlign: "right", fontWeight: 700, color: "hsl(var(--primary))" }}>
+                            {formatIDR(row.value)}
+                          </td>
+                          <td style={{ padding: "10px 16px", textAlign: "right", color: "hsl(var(--accent))" }}>
+                            {formatIDR(row.total_contributed)}
+                          </td>
+                          <td style={{ padding: "10px 16px", textAlign: "right", color: "hsl(var(--text-muted))" }}>
+                            {formatIDR(row.interest_earned)}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
               </div>
+              {/* Save to history card */}
+              <div className="card" style={{ padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, background: "hsl(var(--bg-surface))" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 240 }}>
+                  <Save size={18} style={{ color: "hsl(var(--primary))", flexShrink: 0 }} />
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="Beri label (opsional, contoh: Target Pensiun 2036)"
+                    value={saveLabel}
+                    onChange={(e) => setSaveLabel(e.target.value)}
+                    style={{ fontSize: "0.83rem", padding: "6px 12px", height: "auto" }}
+                  />
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  {savedMsg && (
+                    <span style={{ fontSize: "0.82rem", color: "hsl(var(--success))", fontWeight: 600 }}>
+                      {savedMsg}
+                    </span>
+                  )}
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={handleSave}
+                    disabled={saving}
+                    style={{ gap: 6 }}
+                  >
+                    <Save size={14} />
+                    {saving ? "Menyimpan..." : "Simpan ke Riwayat"}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
         </div>
       </div>
+
+      {/* ═══════════════════════════════════════════════════════════════════════
+          HISTORY TABLE
+         ═══════════════════════════════════════════════════════════════════════ */}
+      <div style={{ marginTop: 36 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+          <div>
+            <h2 style={{ fontWeight: 700, fontSize: "1.1rem", color: "hsl(var(--text-primary))", display: "flex", alignItems: "center", gap: 8 }}>
+              <BarChart2 size={20} /> Riwayat Simulasi Bunga Berbunga
+            </h2>
+            <p style={{ fontSize: "0.78rem", color: "hsl(var(--text-muted))", marginTop: 2 }}>
+              Daftar skenario investasi yang pernah Anda simpan. Pilih 2 atau lebih simulasi untuk membandingkan.
+            </p>
+          </div>
+          {selectedIds.size >= 2 && (
+            <button
+              className="btn btn-primary btn-sm"
+              style={{ gap: 6 }}
+              onClick={() => setShowCompare(true)}
+            >
+              📊 Bandingkan ({selectedIds.size} simulasi)
+            </button>
+          )}
+        </div>
+
+        {historyLoading ? (
+          <div className="skeleton" style={{ height: 120, borderRadius: 12 }} />
+        ) : history.length === 0 ? (
+          <div className="card" style={{ padding: 40, textAlign: "center", borderStyle: "dashed" }}>
+            <Save size={32} color="hsl(var(--text-muted))" style={{ margin: "0 auto 12px" }} />
+            <p style={{ color: "hsl(var(--text-secondary))", fontSize: "0.88rem" }}>
+              Belum ada simulasi yang disimpan. Atur parameter, lalu klik <strong>"Simpan ke Riwayat"</strong>.
+            </p>
+          </div>
+        ) : (
+          <div className="card" style={{ overflow: "hidden" }}>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
+                <thead>
+                  <tr style={{ borderBottom: "1.5px solid hsl(var(--border))", background: "hsl(var(--bg-base))" }}>
+                    <th style={{ padding: "12px 10px", textAlign: "center", width: 40 }}>
+                      <span style={{ fontSize: "0.7rem", color: "hsl(var(--text-muted))" }}>Pilih</span>
+                    </th>
+                    <th style={{ padding: "12px 14px", textAlign: "left", fontWeight: 600, color: "hsl(var(--text-secondary))" }}>Tanggal</th>
+                    <th style={{ padding: "12px 14px", textAlign: "left", fontWeight: 600, color: "hsl(var(--text-secondary))" }}>Label Skenario</th>
+                    <th style={{ padding: "12px 14px", textAlign: "left", fontWeight: 600, color: "hsl(var(--text-secondary))" }}>Tipe & Suku Bunga</th>
+                    <th style={{ padding: "12px 14px", textAlign: "right", fontWeight: 600, color: "hsl(var(--text-secondary))" }}>Modal Awal</th>
+                    <th style={{ padding: "12px 14px", textAlign: "center", fontWeight: 600, color: "hsl(var(--text-secondary))" }}>Tenor</th>
+                    <th style={{ padding: "12px 14px", textAlign: "right", fontWeight: 600, color: "hsl(var(--text-secondary))" }}>Setoran/Bln</th>
+                    <th style={{ padding: "12px 14px", textAlign: "right", fontWeight: 600, color: "hsl(var(--text-secondary))" }}>Total Bunga</th>
+                    <th style={{ padding: "12px 14px", textAlign: "right", fontWeight: 600, color: "hsl(var(--text-secondary))" }}>Nilai Akhir</th>
+                    <th style={{ padding: "12px 10px", textAlign: "center", width: 50 }}>Aksi</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {history.map((h) => {
+                    const isDynamic = Boolean(h.params?.use_dynamic);
+                    const effRatePct = (h.result.effective_rate * 100).toFixed(2);
+                    return (
+                      <tr
+                        key={h.id}
+                        style={{
+                          borderBottom: "1px solid hsl(var(--border))",
+                          background: selectedIds.has(h.id) ? "rgba(16,185,129,0.04)" : "transparent",
+                          transition: "background 0.15s",
+                        }}
+                      >
+                        <td style={{ padding: "10px 10px", textAlign: "center" }}>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(h.id)}
+                            onChange={() => toggleSelect(h.id)}
+                            style={{ accentColor: "hsl(var(--primary))", width: 16, height: 16, cursor: "pointer" }}
+                          />
+                        </td>
+                        <td style={{ padding: "10px 14px", color: "hsl(var(--text-primary))", whiteSpace: "nowrap" }}>
+                          {formatDateShort(h.created_at)}
+                        </td>
+                        <td style={{ padding: "10px 14px", color: "hsl(var(--text-primary))", fontWeight: 500 }}>
+                          {h.label || <span style={{ color: "hsl(var(--text-muted))", fontStyle: "italic" }}>—</span>}
+                        </td>
+                        <td style={{ padding: "10px 14px", color: "hsl(var(--text-secondary))" }}>
+                          {isDynamic ? (
+                            <span className="badge badge-info" style={{ fontSize: "0.72rem" }}>
+                              Dinamis: {h.portfolio?.name || "Kustom"} (~{effRatePct}%)
+                            </span>
+                          ) : (
+                            <span className="badge" style={{ fontSize: "0.72rem", background: "rgba(16,185,129,0.1)", color: "hsl(var(--primary))" }}>
+                              Tetap: {effRatePct}%/thn
+                            </span>
+                          )}
+                        </td>
+                        <td style={{ padding: "10px 14px", textAlign: "right", color: "hsl(var(--text-primary))" }}>
+                          {formatIDR(Number(h.params.principal) || 0)}
+                        </td>
+                        <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                          {h.params.tenor_years} thn
+                        </td>
+                        <td style={{ padding: "10px 14px", textAlign: "right", color: "hsl(var(--text-secondary))" }}>
+                          {formatIDR(Number(h.params.additional_monthly) || 0)}
+                        </td>
+                        <td style={{ padding: "10px 14px", textAlign: "right", fontWeight: 600, color: "hsl(var(--accent))" }}>
+                          {formatIDR(h.result.total_interest)}
+                        </td>
+                        <td style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, color: "hsl(var(--primary))" }}>
+                          {formatIDR(h.result.final_value)}
+                        </td>
+                        <td style={{ padding: "10px 10px", textAlign: "center" }}>
+                          <button
+                            className="btn btn-danger btn-sm"
+                            style={{ padding: "4px 8px" }}
+                            onClick={() => handleDeleteHistory(h.id)}
+                            disabled={deletingId === h.id}
+                            title="Hapus"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════════════════
+          COMPARISON PANEL (modal overlay)
+         ═══════════════════════════════════════════════════════════════════════ */}
+      {showCompare && selectedIds.size >= 2 && (() => {
+        const selected = history.filter((h) => selectedIds.has(h.id));
+
+        // Evaluasi dan ranking
+        const evaluated = selected.map((s, index) => {
+          const labelText = s.label || (s.params.use_dynamic ? (s.portfolio?.name || "Kustom Dinamis") : `Skenario ${index + 1}`);
+          const finalVal = s.result.final_value;
+          const totalContrib = s.result.total_contributed;
+          const totalInt = s.result.total_interest;
+          const roi = totalContrib > 0 ? (totalInt / totalContrib) * 100 : 0;
+          const monthly = Number(s.params.additional_monthly) || 0;
+          const effRate = s.result.effective_rate;
+
+          return {
+            ...s,
+            simIndex: index + 1,
+            labelText,
+            finalVal,
+            totalContrib,
+            totalInt,
+            roi,
+            monthly,
+            effRate,
+          };
+        });
+
+        // 1. Akumulasi Kekayaan Terbesar
+        const bestWealth = [...evaluated].sort((a, b) => b.finalVal - a.finalVal)[0];
+        // 2. Efisiensi Penggandaan Modal (ROI Tertinggi)
+        const bestROI = [...evaluated].sort((a, b) => b.roi - a.roi)[0];
+        // 3. Arus Kas Terhemat
+        const bestBudget = [...evaluated].sort((a, b) => a.totalContrib - b.totalContrib)[0];
+
+        const chartData = evaluated.map((e) => ({
+          name: e.labelText.length > 14 ? e.labelText.substring(0, 12) + "…" : e.labelText,
+          "Total Modal": e.totalContrib,
+          "Nilai Akhir": e.finalVal,
+        }));
+
+        const rows: { label: string; key: string; format: (h: typeof evaluated[0]) => string; highlightBest?: "max" | "min" }[] = [
+          {
+            label: "Modal Awal",
+            key: "principal",
+            format: (h) => formatIDR(Number(h.params.principal) || 0),
+          },
+          {
+            label: "Jangka Waktu (Tenor)",
+            key: "tenor",
+            format: (h) => `${h.params.tenor_years} Tahun`,
+          },
+          {
+            label: "Frekuensi Compounding",
+            key: "frequency",
+            format: (h) => h.params.frequency === "monthly" ? "Bulanan (12x/thn)" : h.params.frequency === "quarterly" ? "Triwulanan (4x/thn)" : h.params.frequency === "annually" ? "Tahunan (1x/thn)" : `Kustom (${h.params.custom_frequency || "-"}x/thn)`,
+          },
+          {
+            label: "Setoran Bulanan Rutin",
+            key: "additional",
+            format: (h) => formatIDR(Number(h.params.additional_monthly) || 0),
+          },
+          {
+            label: "Suku Bunga Efektif (EAR)",
+            key: "effRate",
+            format: (h) => `${(h.effRate * 100).toFixed(2)}% / tahun`,
+            highlightBest: "max",
+          },
+          {
+            label: "Total Modal Disetor",
+            key: "totalContrib",
+            format: (h) => formatIDR(h.totalContrib),
+          },
+          {
+            label: "Total Keuntungan Bunga",
+            key: "totalInt",
+            format: (h) => formatIDR(h.totalInt),
+            highlightBest: "max",
+          },
+          {
+            label: "Penggandaan Modal (ROI)",
+            key: "roi",
+            format: (h) => `+${h.roi.toFixed(1)}%`,
+            highlightBest: "max",
+          },
+          {
+            label: "Nilai Akhir Total Portofolio",
+            key: "finalVal",
+            format: (h) => formatIDR(h.finalVal),
+            highlightBest: "max",
+          },
+        ];
+
+        return (
+          <div
+            style={{
+              position: "fixed", inset: 0, zIndex: 1000,
+              background: "rgba(0,0,0,0.65)", backdropFilter: "blur(4px)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              padding: 12,
+            }}
+            onClick={() => setShowCompare(false)}
+          >
+            <div
+              style={{
+                background: "hsl(var(--bg-surface))",
+                borderRadius: 16,
+                border: "1px solid hsl(var(--border))",
+                maxWidth: "98vw",
+                width: Math.max(1000, Math.min(selected.length * 360 + 380, 1560)),
+                maxHeight: "95vh",
+                display: "flex", flexDirection: "column",
+                boxShadow: "0 25px 60px -12px rgba(0, 0, 0, 0.45)",
+                overflow: "hidden",
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Modal header */}
+              <div style={{ padding: "18px 28px", borderBottom: "1px solid hsl(var(--border))", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0 }}>
+                <div>
+                  <h3 style={{ fontWeight: 700, fontSize: "1.2rem", color: "hsl(var(--text-primary))", display: "flex", alignItems: "center", gap: 8 }}>
+                    📊 Perbandingan Hasil Simulasi Bunga Berbunga
+                  </h3>
+                  <p style={{ fontSize: "0.82rem", color: "hsl(var(--text-secondary))", marginTop: 2 }}>
+                    Membandingkan {selected.length} skenario investasi secara berdampingan dengan evaluasi analitis
+                  </p>
+                </div>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setShowCompare(false)}
+                  style={{ padding: "6px 10px" }}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Modal body */}
+              <div style={{ padding: "24px 28px", overflowY: "auto", display: "flex", flexDirection: "column", gap: 24, flex: 1, minHeight: 0 }}>
+
+                {/* Recommendation Box */}
+                <div style={{ flexShrink: 0, background: "linear-gradient(135deg, rgba(16,185,129,0.08) 0%, rgba(99,102,241,0.06) 100%)", border: "1px solid rgba(16,185,129,0.25)", borderRadius: 14, padding: "20px 24px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+                    <Sparkles size={20} style={{ color: "hsl(var(--primary))" }} />
+                    <h4 style={{ fontWeight: 700, fontSize: "1.02rem", color: "hsl(var(--text-primary))" }}>
+                      Analisis & Rekomendasi Skenario Investasi
+                    </h4>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 14 }}>
+                    {/* Rekomendasi Akumulasi Kekayaan Maksimal */}
+                    <div style={{ background: "hsl(var(--bg-surface))", borderRadius: 12, padding: "14px 18px", border: "1px solid hsl(var(--border))", display: "flex", flexDirection: "column", gap: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <span style={{ fontSize: "0.75rem", fontWeight: 700, color: "hsl(var(--primary))", textTransform: "uppercase", display: "flex", alignItems: "center", gap: 5 }}>
+                          <Award size={14} /> Akumulasi Kekayaan Terbesar
+                        </span>
+                        <span className="badge badge-success" style={{ fontSize: "0.7rem" }}>Nilai Akhir Juara</span>
+                      </div>
+                      <div style={{ fontWeight: 700, fontSize: "1rem", color: "hsl(var(--text-primary))" }}>
+                        {bestWealth.labelText}
+                      </div>
+                      <div style={{ fontSize: "0.82rem", color: "hsl(var(--text-secondary))", lineHeight: 1.6 }}>
+                        Menghasilkan total akumulasi <strong>{formatIDR(bestWealth.finalVal)}</strong> dengan laba bunga <strong>{formatIDR(bestWealth.totalInt)}</strong>. Pilihan terbaik untuk target nominal jangka panjang.
+                      </div>
+                    </div>
+
+                    {/* Rekomendasi Efisiensi Modal / ROI Tertinggi */}
+                    <div style={{ background: "hsl(var(--bg-surface))", borderRadius: 12, padding: "14px 18px", border: "1px solid hsl(var(--border))", display: "flex", flexDirection: "column", gap: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <span style={{ fontSize: "0.75rem", fontWeight: 700, color: "hsl(var(--accent))", textTransform: "uppercase", display: "flex", alignItems: "center", gap: 5 }}>
+                          <TrendingUp size={14} /> Penggandaan Modal (ROI) Terbaik
+                        </span>
+                        <span className="badge badge-info" style={{ fontSize: "0.7rem" }}>Efisiensi Modal</span>
+                      </div>
+                      <div style={{ fontWeight: 700, fontSize: "1rem", color: "hsl(var(--text-primary))" }}>
+                        {bestROI.labelText}
+                      </div>
+                      <div style={{ fontSize: "0.82rem", color: "hsl(var(--text-secondary))", lineHeight: 1.6 }}>
+                        Menghasilkan rasio penggandaan <strong>+{bestROI.roi.toFixed(1)}%</strong> terhadap modal yang disetor. Setiap rupiah modal bertumbuh paling optimal.
+                      </div>
+                    </div>
+
+                    {/* Rekomendasi Arus Kas Ringan */}
+                    <div style={{ background: "hsl(var(--bg-surface))", borderRadius: 12, padding: "14px 18px", border: "1px solid hsl(var(--border))", display: "flex", flexDirection: "column", gap: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <span style={{ fontSize: "0.75rem", fontWeight: 700, color: "#059669", textTransform: "uppercase", display: "flex", alignItems: "center", gap: 5 }}>
+                          <ShieldCheck size={14} /> Beban Modal Paling Ringan
+                        </span>
+                        <span className="badge" style={{ fontSize: "0.7rem", background: "rgba(5,150,105,0.1)", color: "#059669" }}>Ramah Arus Kas</span>
+                      </div>
+                      <div style={{ fontWeight: 700, fontSize: "1rem", color: "hsl(var(--text-primary))" }}>
+                        {bestBudget.labelText}
+                      </div>
+                      <div style={{ fontSize: "0.82rem", color: "hsl(var(--text-secondary))", lineHeight: 1.6 }}>
+                        Hanya membutuhkan total modal <strong>{formatIDR(bestBudget.totalContrib)}</strong> dengan setoran bulanan <strong>{formatIDR(bestBudget.monthly)}</strong>.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Comparison Bar Chart */}
+                <div style={{ flexShrink: 0, background: "hsl(var(--bg-base))", borderRadius: 14, padding: "20px 24px", border: "1px solid hsl(var(--border))" }}>
+                  <h4 style={{ fontWeight: 700, fontSize: "0.95rem", color: "hsl(var(--text-primary))", marginBottom: 14 }}>
+                    Perbandingan Visual: Total Modal Disetor vs Nilai Akhir
+                  </h4>
+                  <div style={{ height: 280, width: "100%" }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={chartData} margin={{ top: 10, right: 10, left: 10, bottom: 20 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                        <XAxis dataKey="name" tick={{ fontSize: 12, fill: "hsl(var(--text-secondary))" }} interval={0} />
+                        <YAxis tick={{ fontSize: 12, fill: "hsl(var(--text-muted))" }} tickFormatter={(v) => formatIDR(v, true)} width={80} />
+                        <Tooltip
+                          contentStyle={{ background: "hsl(var(--bg-surface))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: "0.85rem" }}
+                          formatter={(v: any) => [formatIDR(Number(v)), ""]}
+                        />
+                        <Legend wrapperStyle={{ fontSize: "0.82rem", paddingTop: 10 }} />
+                        <Bar dataKey="Total Modal" fill="hsl(var(--accent))" radius={[4, 4, 0, 0]} />
+                        <Bar dataKey="Nilai Akhir" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* Detailed Matrix Table */}
+                <div style={{ flexShrink: 0, overflowX: "auto", border: "1px solid hsl(var(--border))", borderRadius: 14 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.86rem" }}>
+                    <thead>
+                      <tr style={{ background: "hsl(var(--bg-base))", borderBottom: "1.5px solid hsl(var(--border))" }}>
+                        <th style={{ padding: "14px 20px", textAlign: "left", fontWeight: 700, color: "hsl(var(--text-secondary))", width: 240, position: "sticky", left: 0, background: "hsl(var(--bg-base))", zIndex: 2 }}>
+                          Parameter & Metrik
+                        </th>
+                        {evaluated.map((s) => (
+                          <th key={s.id} style={{ padding: "14px 20px", textAlign: "right", fontWeight: 700, color: "hsl(var(--text-primary))", minWidth: 180 }}>
+                            <div style={{ fontSize: "0.9rem" }}>{s.labelText}</div>
+                            <div style={{ fontSize: "0.74rem", fontWeight: 400, color: "hsl(var(--text-muted))", marginTop: 2 }}>
+                              {s.params.tenor_years} Thn • {formatDateShort(s.created_at)}
+                            </div>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((row, idx) => {
+                        const values = evaluated.map((e) => (row.key === "effRate" ? e.effRate : row.key === "totalInt" ? e.totalInt : row.key === "roi" ? e.roi : row.key === "finalVal" ? e.finalVal : 0));
+                        const maxVal = Math.max(...values);
+
+                        return (
+                          <tr key={row.key} style={{ borderBottom: "1px solid hsl(var(--border))", background: idx % 2 === 0 ? "transparent" : "hsl(var(--bg-base) / 0.4)" }}>
+                            <td style={{ padding: "12px 20px", fontWeight: 600, color: "hsl(var(--text-secondary))", position: "sticky", left: 0, background: idx % 2 === 0 ? "hsl(var(--bg-surface))" : "hsl(var(--bg-base))", zIndex: 1 }}>
+                              {row.label}
+                            </td>
+                            {evaluated.map((s) => {
+                              const isMax = row.highlightBest === "max" && (row.key === "effRate" ? s.effRate : row.key === "totalInt" ? s.totalInt : row.key === "roi" ? s.roi : row.key === "finalVal" ? s.finalVal : -1) === maxVal;
+                              return (
+                                <td
+                                  key={s.id}
+                                  style={{
+                                    padding: "12px 20px",
+                                    textAlign: "right",
+                                    fontWeight: isMax ? 700 : 500,
+                                    color: isMax ? "hsl(var(--primary))" : "hsl(var(--text-primary))",
+                                    background: isMax ? "rgba(16,185,129,0.06)" : "transparent",
+                                  }}
+                                >
+                                  {row.format(s)}
+                                  {isMax && <span style={{ marginLeft: 6, fontSize: "0.8rem" }}>👑</span>}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+              </div>
+
+              {/* Modal footer */}
+              <div style={{ padding: "12px 24px", borderTop: "1px solid hsl(var(--border))", display: "flex", justifyContent: "flex-end", flexShrink: 0 }}>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setShowCompare(false)}
+                >
+                  Tutup
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

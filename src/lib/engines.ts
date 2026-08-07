@@ -83,14 +83,16 @@ export interface CompoundInput {
   principal: number;
   annual_rate: number;        // decimal, e.g. 0.08 for 8%
   tenor_years: number;
-  frequency: "daily" | "monthly" | "quarterly" | "annually";
+  frequency: "daily" | "monthly" | "quarterly" | "annually" | "custom" | string;
+  custom_frequency?: number;
   additional_monthly: number; // additional contribution per month
   dynamic_rates?: number[];   // dynamic rates per year/period
 }
 
 export interface CompoundPeriod {
   period: number;
-  label: string;             // e.g. "Tahun 1", "Bulan 6"
+  label: string;             // e.g. "Tahun 1 (2027)", "Bulan 6"
+  sub_label?: string;        // e.g. "2027" or "Bulan ke-6"
   value: number;             // total portfolio value
   interest_earned: number;   // cumulative interest
   total_contributed: number; // cumulative contributions
@@ -102,56 +104,99 @@ export interface CompoundOutput {
   total_contributed: number;
   effective_rate: number;
   projection: CompoundPeriod[];
+  periodic_projection?: CompoundPeriod[];
 }
 
-const FREQ_MAP = { daily: 365, monthly: 12, quarterly: 4, annually: 1 };
+const FREQ_MAP: Record<string, number> = { daily: 365, monthly: 12, quarterly: 4, annually: 1 };
 
 /**
  * Compound interest with optional monthly additional contributions.
  * Formula: A = P(1 + r/n)^(nt) + PMT * [((1+r/n)^(nt) - 1) / (r/n)]
  */
 export function computeCompoundInterest(input: CompoundInput): CompoundOutput {
-  const { principal, annual_rate, tenor_years, frequency, additional_monthly, dynamic_rates } = input;
-  const n = FREQ_MAP[frequency];
-  const additional_per_period = additional_monthly * (12 / n);
+  const { principal, annual_rate, tenor_years, frequency, custom_frequency, additional_monthly = 0, dynamic_rates } = input;
+  
+  let n = FREQ_MAP[frequency];
+  if (!n || n <= 0) {
+    if (frequency === "custom" && custom_frequency && custom_frequency > 0) {
+      n = custom_frequency;
+    } else {
+      n = 12; // default to monthly
+    }
+  }
+
+  const additional_per_period = (Number(additional_monthly) || 0) * (12 / n);
 
   const projection: CompoundPeriod[] = [];
-  const labelUnit = "Tahun";
+  const periodic_projection: CompoundPeriod[] = [];
+  const currentYear = new Date().getFullYear();
 
-  let currentValue = principal;
-  let totalContributed = principal;
+  let currentValue = Math.max(0, Number(principal) || 0);
+  let totalContributed = Math.max(0, Number(principal) || 0);
 
   // Year 0 (initial)
-  projection.push({
+  const initialPoint: CompoundPeriod = {
+    period: 0,
+    label: `Awal (${currentYear})`,
+    sub_label: "Modal Awal",
+    value: Math.round(currentValue),
+    interest_earned: 0,
+    total_contributed: Math.round(totalContributed),
+  };
+  projection.push(initialPoint);
+  periodic_projection.push({
     period: 0,
     label: "Awal",
+    sub_label: "Modal Awal",
     value: Math.round(currentValue),
     interest_earned: 0,
     total_contributed: Math.round(totalContributed),
   });
 
+  let periodCounter = 0;
+  const maxPeriodicPoints = 240; // cap for performance in very long tenors
+
   // Calculate year by year
   for (let year = 1; year <= tenor_years; year++) {
-    // Determine the rate to use for this year.
-    // If dynamic_rates is provided, use the rate for this year (1-based, index year-1),
-    // otherwise fallback to the annual_rate.
     const year_rate = (dynamic_rates && dynamic_rates[year - 1] !== undefined)
       ? dynamic_rates[year - 1]
-      : annual_rate;
+      : (Number(annual_rate) || 0);
 
     const rate_per_period = year_rate / n;
 
     // Compounding n periods within this year
     for (let p = 1; p <= n; p++) {
+      periodCounter++;
       currentValue = currentValue * (1 + rate_per_period) + additional_per_period;
       totalContributed += additional_per_period;
+
+      if (frequency !== "annually" && periodCounter <= maxPeriodicPoints) {
+        let periodLabel = `Periode ${periodCounter}`;
+        if (frequency === "monthly") {
+          periodLabel = `Bulan ${periodCounter}`;
+        } else if (frequency === "quarterly") {
+          periodLabel = `Triwulan ${periodCounter}`;
+        } else if (frequency === "daily") {
+          periodLabel = `Hari ${periodCounter}`;
+        }
+
+        periodic_projection.push({
+          period: periodCounter,
+          label: periodLabel,
+          sub_label: `Tahun ${year} (${currentYear + year})`,
+          value: Math.round(currentValue),
+          interest_earned: Math.round(Math.max(0, currentValue - totalContributed)),
+          total_contributed: Math.round(totalContributed),
+        });
+      }
     }
 
     const interest_earned = currentValue - totalContributed;
 
     projection.push({
       period: year,
-      label: `${labelUnit} ${year}`,
+      label: `Tahun ${year} (${currentYear + year})`,
+      sub_label: `Tahun ke-${year}`,
       value: Math.round(currentValue),
       interest_earned: Math.round(Math.max(0, interest_earned)),
       total_contributed: Math.round(totalContributed),
@@ -161,14 +206,20 @@ export function computeCompoundInterest(input: CompoundInput): CompoundOutput {
   // Effective rate is the average dynamic rate if dynamic, otherwise compounded static rate
   const effective_rate = dynamic_rates && dynamic_rates.length > 0
     ? (dynamic_rates.reduce((sum, r) => sum + r, 0) / dynamic_rates.length)
-    : (Math.pow(1 + annual_rate / n, n) - 1);
+    : (n > 0 ? Math.pow(1 + (Number(annual_rate) || 0) / n, n) - 1 : (Number(annual_rate) || 0));
 
-  const final = projection[projection.length - 1];
+  const final = projection[projection.length - 1] || {
+    value: currentValue,
+    interest_earned: 0,
+    total_contributed: totalContributed,
+  };
+
   return {
     final_value: final.value,
     total_interest: final.interest_earned,
     total_contributed: final.total_contributed,
     effective_rate,
     projection,
+    periodic_projection: frequency !== "annually" ? periodic_projection : undefined,
   };
 }

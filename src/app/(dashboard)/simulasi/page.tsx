@@ -1,15 +1,45 @@
 "use client";
 
-import { useState, useEffect, Suspense, useRef } from "react";
+import { useState, useEffect, useCallback, Suspense, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useSearchParams } from "next/navigation";
-import { FlaskConical, ChevronDown, Info, AlertTriangle, HelpCircle } from "lucide-react";
+import {
+  FlaskConical, ChevronDown, Info, AlertTriangle, HelpCircle,
+  Save, Trash2, BarChart2, X, Check, Sparkles, ShieldCheck,
+  TrendingUp, Award, ThumbsUp
+} from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine, Cell
 } from "recharts";
-import { formatIDR, formatPct } from "@/lib/utils";
+import { formatIDR, formatPct, formatNumberSeparator, parseNumberSeparator, formatDateShort } from "@/lib/utils";
 import type { Portfolio, VaRResult } from "@/types";
+
+// ─── History record type ──────────────────────────────────────────────────────
+interface HistoryRecord {
+  id: string;
+  label: string | null;
+  params: {
+    portfolio_id: string;
+    confidence: number;
+    period_days: number;
+    holding_period: number;
+    [key: string]: unknown;
+  };
+  result: {
+    var_value: number;
+    var_percentage: number;
+    confidence: number;
+    holding_period: number;
+    portfolio_value: number;
+    threshold: number;
+    num_observations: number;
+    mean_return: number;
+    std_return: number;
+  };
+  created_at: string;
+  portfolio: { name: string } | null;
+}
 
 // ─── Reusable tooltip with ? button ───────────────────────────────────────────
 function InfoTooltip({ text }: { text: string }) {
@@ -86,6 +116,16 @@ function SimulasiContent() {
   const [result, setResult] = useState<VaRResult | null>(null);
   const [error, setError] = useState("");
 
+  // Save & History states
+  const [saving, setSaving] = useState(false);
+  const [saveLabel, setSaveLabel] = useState("");
+  const [savedMsg, setSavedMsg] = useState("");
+  const [history, setHistory] = useState<HistoryRecord[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showCompare, setShowCompare] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
   // Custom portfolio states
   const [availableAssets, setAvailableAssets] = useState<{ id: string; name: string; type: string; symbol: string }[]>([]);
   const [customValue, setCustomValue] = useState(10000000);
@@ -123,12 +163,79 @@ function SimulasiContent() {
     loadAssets();
   }, []);
 
+  // ─── History fetch ──────────────────────────────────────────────────────────
+  const fetchHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const res = await fetch("/api/simulate/var/history");
+      const json = await res.json();
+      if (json.data) setHistory(json.data);
+    } catch { /* ignore */ }
+    setHistoryLoading(false);
+  }, []);
+
+  useEffect(() => { fetchHistory(); }, [fetchHistory]);
+
+  // ─── Save handler ──────────────────────────────────────────────────────────
+  const handleSave = async () => {
+    if (!result) return;
+    setSaving(true);
+    setSavedMsg("");
+
+    const customHoldings = Object.entries(weights)
+      .filter(([_, w]) => w > 0)
+      .map(([assetId, w]) => ({ asset_id: assetId, weight: w / 100 }));
+
+    await fetch("/api/simulate/var", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        portfolio_id: portfolioId,
+        confidence,
+        period_days: periodDays,
+        holding_period: holdingPeriod,
+        custom_holdings: portfolioId === "custom" ? customHoldings : undefined,
+        portfolio_value: portfolioId === "custom" ? customValue : undefined,
+        save: true,
+        label: saveLabel || null,
+      }),
+    });
+
+    setSaving(false);
+    setSavedMsg("✓ Tersimpan!");
+    setSaveLabel("");
+    fetchHistory();
+    setTimeout(() => setSavedMsg(""), 3000);
+  };
+
+  // ─── Delete handler ────────────────────────────────────────────────────────
+  const handleDeleteHistory = async (id: string) => {
+    setDeletingId(id);
+    await fetch("/api/simulate/var/history", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    setDeletingId(null);
+    setSelectedIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
+    fetchHistory();
+  };
+
+  // ─── Toggle selection ──────────────────────────────────────────────────────
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
   const totalWeight = Object.values(weights).reduce((a, b) => a + b, 0);
 
   const handleSimulate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!portfolioId) { setError("Pilih portofolio terlebih dahulu."); return; }
-    
+
     if (portfolioId === "custom") {
       if (totalWeight !== 100) {
         setError("Total alokasi kustom komposisi portofolio harus bernilai 100%.");
@@ -219,7 +326,7 @@ function SimulasiContent() {
       >
         <Info size={16} color="hsl(var(--accent))" style={{ flexShrink: 0, marginTop: 2 }} />
         <p style={{ fontSize: "0.85rem", color: "hsl(var(--accent-dark))", lineHeight: 1.6 }}>
-          <strong>Tingkat Keyakinan 95% (1 hari)</strong> artinya: Berdasarkan data naik-turunnya harga di masa lalu, ada kemungkinan kecil (5%) portofolio Anda mengalami kerugian lebih besar dari angka hasil simulasi dalam 1 hari ke depan. 
+          <strong>Tingkat Keyakinan 95% (1 hari)</strong> artinya: Berdasarkan data naik-turunnya harga di masa lalu, ada kemungkinan kecil (5%) portofolio Anda mengalami kerugian lebih besar dari angka hasil simulasi dalam 1 hari ke depan.
         </p>
       </div>
 
@@ -259,15 +366,21 @@ function SimulasiContent() {
                     <label htmlFor="custom-value-input" style={{ display: "block", fontSize: "0.75rem", fontWeight: 600, color: "hsl(var(--text-secondary))", marginBottom: 4 }}>
                       Modal Awal Investasi (Rp)
                     </label>
-                    <input
-                      id="custom-value-input"
-                      type="number"
-                      min={1000}
-                      className="input-base"
-                      value={customValue}
-                      onChange={(e) => setCustomValue(Number(e.target.value))}
-                      style={{ padding: "6px 10px", fontSize: "0.82rem" }}
-                    />
+                    <div style={{ position: "relative" }}>
+                      <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "hsl(var(--text-muted))", fontSize: "0.82rem", pointerEvents: "none" }}>
+                        Rp
+                      </span>
+                      <input
+                        id="custom-value-input"
+                        type="text"
+                        inputMode="numeric"
+                        className="input-base"
+                        value={formatNumberSeparator(customValue)}
+                        onChange={(e) => setCustomValue(parseNumberSeparator(e.target.value))}
+                        placeholder="10.000.000"
+                        style={{ padding: "6px 10px 6px 34px", fontSize: "0.82rem" }}
+                      />
+                    </div>
                   </div>
 
                   <div>
@@ -376,11 +489,11 @@ function SimulasiContent() {
               </div>
             )}
 
-            <button 
-              id="btn-simulate-var" 
-              type="submit" 
-              className="btn btn-primary" 
-              style={{ marginTop: 4 }} 
+            <button
+              id="btn-simulate-var"
+              type="submit"
+              className="btn btn-primary"
+              style={{ marginTop: 4 }}
               disabled={loading || (portfolioId === "custom" && totalWeight !== 100)}
             >
               {loading ? "Menghitung..." : (
@@ -427,41 +540,119 @@ function SimulasiContent() {
                     Perkiraan Kerugian ({(result.confidence * 100).toFixed(0)}%, {result.holding_period} hari)
                   </div>
                   <div style={{ fontSize: "1.8rem", fontWeight: 800, color: "hsl(var(--danger))", lineHeight: 1 }}>
-                    {formatIDR(result.var_value, true)}
+                    {formatIDR(result.var_value)}
                   </div>
                   <div style={{ fontSize: "0.82rem", color: "hsl(var(--danger))", marginTop: 6 }}>
                     {formatPct(result.var_percentage * 100)} dari nilai portofolio
                   </div>
                 </div>
-                <div className="stat-card">
-                  <div style={{ fontSize: "0.75rem", fontWeight: 600, color: "hsl(var(--text-secondary))", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>
-                    Rangkuman Kinerja
+                <div className="stat-card" style={{ padding: "18px 20px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                    <div style={{ fontSize: "0.75rem", fontWeight: 700, color: "hsl(var(--text-secondary))", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                      Rangkuman Kinerja & Parameter
+                    </div>
+                    <span style={{ fontSize: "0.72rem", background: "hsl(var(--bg-base))", border: "1px solid hsl(var(--border))", padding: "2px 8px", borderRadius: 6, color: "hsl(var(--text-muted))" }}>
+                      Modal: {formatIDR(result.portfolio_value)}
+                    </span>
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: "0.83rem" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between" }}>
-                      <span style={{ color: "hsl(var(--text-secondary))" }}>Total Observasi (hari):</span>
-                      <span style={{ fontWeight: 600, color: "hsl(var(--text-primary))" }}>{result.num_observations}</span>
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10, fontSize: "0.83rem" }}>
+                    {/* Total Observasi */}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", paddingBottom: 8, borderBottom: "1px solid hsl(var(--border) / 0.5)" }}>
+                      <div>
+                        <span style={{ color: "hsl(var(--text-secondary))", fontWeight: 500, display: "block" }}>Total Observasi:</span>
+                        <span style={{ fontSize: "0.72rem", color: "hsl(var(--text-muted))" }}>Sampel data pergerakan harga</span>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <span style={{ fontWeight: 700, color: "hsl(var(--text-primary))", display: "block" }}>
+                          {result.num_observations} hari
+                        </span>
+                        <span style={{ fontSize: "0.72rem", color: "hsl(var(--text-muted))" }}>hari perdagangan bursa</span>
+                      </div>
                     </div>
-                    <div style={{ display: "flex", justifyContent: "space-between" }}>
-                      <span style={{ color: "hsl(var(--text-secondary))" }}>Rata-rata Untung:</span>
-                      <span style={{ fontWeight: 600, color: result.mean_return >= 0 ? "hsl(var(--primary))" : "hsl(var(--danger))" }}>
-                        {formatPct(result.mean_return * 100)}
-                      </span>
+
+                    {/* Rata-rata Untung */}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", paddingBottom: 8, borderBottom: "1px solid hsl(var(--border) / 0.5)" }}>
+                      <div>
+                        <span style={{ color: "hsl(var(--text-secondary))", fontWeight: 500, display: "block" }}>Rata-rata Untung (Return):</span>
+                        <span style={{ fontSize: "0.72rem", color: "hsl(var(--text-muted))" }}>Pertumbuhan rata-rata harian</span>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <span style={{ fontWeight: 700, color: result.mean_return >= 0 ? "hsl(var(--primary))" : "hsl(var(--danger))", display: "block" }}>
+                          {formatPct(result.mean_return * 100)} / hari
+                        </span>
+                        <span style={{ fontSize: "0.75rem", fontWeight: 600, color: result.mean_return >= 0 ? "hsl(var(--primary))" : "hsl(var(--danger))" }}>
+                          ~{result.mean_return >= 0 ? "+" : ""}{formatIDR(Math.round(result.mean_return * result.portfolio_value))}/hari
+                        </span>
+                      </div>
                     </div>
-                    <div style={{ display: "flex", justifyContent: "space-between" }}>
-                      <span style={{ color: "hsl(var(--text-secondary))" }}>Tingkat Guncangan (Risiko):</span>
-                      <span style={{ fontWeight: 600, color: "hsl(var(--text-primary))" }}>
-                        {formatPct(result.std_return * 100)}
-                      </span>
+
+                    {/* Tingkat Guncangan (Risiko / Volatilitas) */}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", paddingBottom: 8, borderBottom: "1px solid hsl(var(--border) / 0.5)" }}>
+                      <div>
+                        <span style={{ color: "hsl(var(--text-secondary))", fontWeight: 500, display: "block" }}>Tingkat Guncangan (Risiko):</span>
+                        <span style={{ fontSize: "0.72rem", color: "hsl(var(--text-muted))" }}>Standar deviasi fluktuasi harian</span>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <span style={{ fontWeight: 700, color: "hsl(var(--text-primary))", display: "block" }}>
+                          ±{(result.std_return * 100).toFixed(2)}% / hari
+                        </span>
+                        <span style={{ fontSize: "0.75rem", color: "hsl(var(--text-muted))", fontWeight: 500 }}>
+                          ~±{formatIDR(Math.round(result.std_return * result.portfolio_value))}/hari
+                        </span>
+                      </div>
                     </div>
-                    <div style={{ display: "flex", justifyContent: "space-between" }}>
-                      <span style={{ color: "hsl(var(--text-secondary))" }}>Batas Kerugian (VaR):</span>
-                      <span style={{ fontWeight: 600, color: "hsl(var(--danger))" }}>
-                        {formatPct(result.threshold * 100)}
-                      </span>
+
+                    {/* Batas Kerugian (VaR) */}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                      <div>
+                        <span style={{ color: "hsl(var(--text-secondary))", fontWeight: 500, display: "block" }}>Batas Kerugian (VaR):</span>
+                        <span style={{ fontSize: "0.72rem", color: "hsl(var(--text-muted))" }}>Keyakinan {(result.confidence * 100).toFixed(0)}% ({result.holding_period} hari)</span>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <span style={{ fontWeight: 700, color: "hsl(var(--danger))", display: "block" }}>
+                          {formatPct(result.threshold * 100)}
+                        </span>
+                        <span style={{ fontSize: "0.75rem", fontWeight: 700, color: "hsl(var(--danger))" }}>
+                          -{formatIDR(result.var_value)}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </div>
+              </div>
+
+              {/* ═══ SAVE TO HISTORY BUTTON ═══ */}
+              <div
+                style={{
+                  display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8,
+                  padding: "14px 18px", borderRadius: 12,
+                  background: savedMsg ? "rgba(16,185,129,0.08)" : "hsl(var(--bg-surface))",
+                  border: savedMsg ? "1px solid rgba(16,185,129,0.25)" : "1px solid hsl(var(--border))",
+                  transition: "all 0.3s ease",
+                }}
+              >
+                <input
+                  type="text"
+                  className="input-base"
+                  placeholder="Label opsional (cth: Emas 95%)"
+                  value={saveLabel}
+                  onChange={(e) => setSaveLabel(e.target.value)}
+                  style={{ flex: 1, minWidth: 160, padding: "7px 12px", fontSize: "0.82rem" }}
+                />
+                <button
+                  className="btn btn-primary btn-sm"
+                  style={{ gap: 6, whiteSpace: "nowrap" }}
+                  onClick={handleSave}
+                  disabled={saving}
+                >
+                  {saving ? "Menyimpan..." : <><Save size={14} /> Simpan ke Riwayat</>}
+                </button>
+                {savedMsg && (
+                  <span style={{ fontSize: "0.82rem", color: "hsl(var(--primary))", fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
+                    <Check size={14} /> {savedMsg}
+                  </span>
+                )}
               </div>
 
               {/* Histogram */}
@@ -478,8 +669,8 @@ function SimulasiContent() {
                       className="flex flex-1 flex-col justify-center gap-1 px-6 py-4 text-left border-t border-[hsl(var(--border))] sm:border-t-0 sm:border-l sm:px-8 sm:py-6 bg-[hsl(var(--bg-base))] transition-colors"
                     >
                       <span className="text-xs text-[hsl(var(--text-muted))]">Perkiraan Kerugian</span>
-                      <span className="text-lg leading-none font-bold sm:text-3xl text-[hsl(var(--danger))] truncate max-w-[200px]">
-                        {formatIDR(result.var_value, true)}
+                      <span className="text-lg leading-none font-bold sm:text-2xl text-[hsl(var(--danger))] truncate">
+                        {formatIDR(result.var_value)}
                       </span>
                     </button>
                   </div>
@@ -658,6 +849,397 @@ function SimulasiContent() {
           )}
         </div>
       </div>
+
+      {/* ═══════════════════════════════════════════════════════════════════════
+          HISTORY TABLE
+         ═══════════════════════════════════════════════════════════════════════ */}
+      <div style={{ marginTop: 32 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <h2 style={{ fontWeight: 700, fontSize: "1.1rem", color: "hsl(var(--text-primary))", display: "flex", alignItems: "center", gap: 8 }}>
+            <BarChart2 size={20} /> Riwayat Simulasi VaR
+          </h2>
+          {selectedIds.size >= 2 && (
+            <button
+              className="btn btn-primary btn-sm"
+              style={{ gap: 6 }}
+              onClick={() => setShowCompare(true)}
+            >
+              📊 Bandingkan ({selectedIds.size} simulasi)
+            </button>
+          )}
+        </div>
+
+        {historyLoading ? (
+          <div className="skeleton" style={{ height: 120, borderRadius: 12 }} />
+        ) : history.length === 0 ? (
+          <div className="card" style={{ padding: 40, textAlign: "center", borderStyle: "dashed" }}>
+            <Save size={32} color="hsl(var(--text-muted))" style={{ margin: "0 auto 12px" }} />
+            <p style={{ color: "hsl(var(--text-secondary))", fontSize: "0.88rem" }}>
+              Belum ada simulasi yang disimpan. Jalankan simulasi lalu klik <strong>"Simpan ke Riwayat"</strong>.
+            </p>
+          </div>
+        ) : (
+          <div className="card" style={{ overflow: "hidden" }}>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
+                <thead>
+                  <tr style={{ borderBottom: "1.5px solid hsl(var(--border))" }}>
+                    <th style={{ padding: "12px 10px", textAlign: "center", width: 40 }}>
+                      <span style={{ fontSize: "0.7rem", color: "hsl(var(--text-muted))" }}>Pilih</span>
+                    </th>
+                    <th style={{ padding: "12px 14px", textAlign: "left", fontWeight: 600, color: "hsl(var(--text-secondary))" }}>Tanggal</th>
+                    <th style={{ padding: "12px 14px", textAlign: "left", fontWeight: 600, color: "hsl(var(--text-secondary))" }}>Label</th>
+                    <th style={{ padding: "12px 14px", textAlign: "left", fontWeight: 600, color: "hsl(var(--text-secondary))" }}>Portofolio</th>
+                    <th style={{ padding: "12px 14px", textAlign: "center", fontWeight: 600, color: "hsl(var(--text-secondary))" }}>Keyakinan</th>
+                    <th style={{ padding: "12px 14px", textAlign: "center", fontWeight: 600, color: "hsl(var(--text-secondary))" }}>Ditahan</th>
+                    <th style={{ padding: "12px 14px", textAlign: "right", fontWeight: 600, color: "hsl(var(--text-secondary))" }}>VaR (Rp)</th>
+                    <th style={{ padding: "12px 14px", textAlign: "right", fontWeight: 600, color: "hsl(var(--text-secondary))" }}>VaR (%)</th>
+                    <th style={{ padding: "12px 10px", textAlign: "center", width: 50 }}>Aksi</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {history.map((h) => (
+                    <tr
+                      key={h.id}
+                      style={{
+                        borderBottom: "1px solid hsl(var(--border))",
+                        background: selectedIds.has(h.id) ? "rgba(16,185,129,0.04)" : "transparent",
+                        transition: "background 0.15s",
+                      }}
+                    >
+                      <td style={{ padding: "10px 10px", textAlign: "center" }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(h.id)}
+                          onChange={() => toggleSelect(h.id)}
+                          style={{ accentColor: "hsl(var(--primary))", width: 16, height: 16, cursor: "pointer" }}
+                        />
+                      </td>
+                      <td style={{ padding: "10px 14px", color: "hsl(var(--text-primary))", whiteSpace: "nowrap" }}>
+                        {formatDateShort(h.created_at)}
+                      </td>
+                      <td style={{ padding: "10px 14px", color: "hsl(var(--text-primary))" }}>
+                        {h.label || <span style={{ color: "hsl(var(--text-muted))", fontStyle: "italic" }}>—</span>}
+                      </td>
+                      <td style={{ padding: "10px 14px", color: "hsl(var(--text-secondary))" }}>
+                        {h.portfolio?.name || <span style={{ fontStyle: "italic" }}>Kustom</span>}
+                      </td>
+                      <td style={{ padding: "10px 14px", textAlign: "center", fontWeight: 600 }}>
+                        {(h.result.confidence * 100).toFixed(0)}%
+                      </td>
+                      <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                        {h.result.holding_period}h
+                      </td>
+                      <td style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, color: "hsl(var(--danger))" }}>
+                        {formatIDR(h.result.var_value)}
+                      </td>
+                      <td style={{ padding: "10px 14px", textAlign: "right", color: "hsl(var(--danger))" }}>
+                        {formatPct(h.result.var_percentage * 100)}
+                      </td>
+                      <td style={{ padding: "10px 10px", textAlign: "center" }}>
+                        <button
+                          className="btn btn-danger btn-sm"
+                          style={{ padding: "4px 8px" }}
+                          onClick={() => handleDeleteHistory(h.id)}
+                          disabled={deletingId === h.id}
+                          title="Hapus"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════════════════
+          COMPARISON PANEL (modal overlay)
+         ═══════════════════════════════════════════════════════════════════════ */}
+      {showCompare && selectedIds.size >= 2 && (() => {
+        const selected = history.filter((h) => selectedIds.has(h.id));
+
+        // ─── Evaluasi & Logika Rekomendasi Investasi ────────────────────────
+        const evaluated = selected.map((s, index) => {
+          const labelText = s.label || s.portfolio?.name || `Simulasi ${index + 1}`;
+          const displayName = s.label ? `${s.label} (${s.portfolio?.name || "Kustom"})` : s.portfolio?.name ? s.portfolio.name : `Simulasi ${index + 1}`;
+          const mean = s.result.mean_return;
+          const std = s.result.std_return;
+          const varPct = Math.abs(s.result.var_percentage);
+          const varRp = s.result.var_value;
+          // Sharpe ratio harian (Reward to Volatility)
+          const sharpe = std > 0 ? (mean / std) : 0;
+          // Return to VaR ratio
+          const returnToVaR = varPct > 0 ? (mean / varPct) : 0;
+
+          return {
+            ...s,
+            labelText,
+            displayName,
+            simIndex: index + 1,
+            mean,
+            std,
+            varPct,
+            varRp,
+            threshold: s.result.threshold,
+            sharpe,
+            returnToVaR,
+          };
+        });
+
+        // 1. Terbaik untuk Keseimbangan / Rasio Sharpe (Moderat - Rekomendasi Utama)
+        const bestSharpe = [...evaluated].sort((a, b) => b.sharpe - a.sharpe)[0];
+        // 2. Terbaik untuk Keamanan / VaR Terkecil (Konservatif)
+        const bestSafe = [...evaluated].sort((a, b) => a.varPct - b.varPct)[0];
+        // 3. Terbaik untuk Potensi Return Tertinggi (Agresif)
+        const bestReturn = [...evaluated].sort((a, b) => b.mean - a.mean)[0];
+
+        const rows: { label: string; key: string; format: (h: HistoryRecord) => string; highlightBest?: "min" | "max" }[] = [
+          { label: "Label", key: "label", format: (h) => h.label || "—" },
+          { label: "Portofolio", key: "portfolio", format: (h) => h.portfolio?.name || "Kustom" },
+          { label: "Tanggal", key: "date", format: (h) => formatDateShort(h.created_at) },
+          { label: "Keyakinan", key: "confidence", format: (h) => `${(h.result.confidence * 100).toFixed(0)}%` },
+          { label: "Ditahan", key: "holding", format: (h) => `${h.result.holding_period} hari` },
+          { label: "Nilai Portofolio", key: "pv", format: (h) => formatIDR(h.result.portfolio_value) },
+          { label: "VaR (Rp)", key: "var_rp", format: (h) => formatIDR(h.result.var_value), highlightBest: "min" },
+          { label: "VaR (%)", key: "var_pct", format: (h) => `${(h.result.var_percentage * 100).toFixed(2)}%` },
+          { label: "Rata-rata Return", key: "mean", format: (h) => `${formatPct(h.result.mean_return * 100)}/h (~${h.result.mean_return >= 0 ? "+" : ""}${formatIDR(Math.round(h.result.mean_return * h.result.portfolio_value))}/h)`, highlightBest: "max" },
+          { label: "Volatilitas", key: "std", format: (h) => `±${(h.result.std_return * 100).toFixed(2)}%/h (~±${formatIDR(Math.round(h.result.std_return * h.result.portfolio_value))}/h)`, highlightBest: "min" },
+          { label: "Efisiensi (Sharpe Ratio)", key: "sharpe", format: (h) => (h.result.std_return > 0 ? (h.result.mean_return / h.result.std_return) : 0).toFixed(3), highlightBest: "max" },
+          { label: "Batas Kerugian", key: "threshold", format: (h) => `${formatPct(h.result.threshold * 100)} (-${formatIDR(h.result.var_value)})` },
+          { label: "Data Observasi", key: "obs", format: (h) => `${h.result.num_observations} hari` },
+        ];
+
+        return (
+          <div
+            style={{
+              position: "fixed", inset: 0, zIndex: 1000,
+              background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              padding: 20,
+            }}
+            onClick={(e) => { if (e.target === e.currentTarget) setShowCompare(false); }}
+          >
+            <div
+              className="card animate-fade-in-up"
+              style={{
+                maxWidth: "96vw",
+                maxHeight: "92vh",
+                display: "flex",
+                flexDirection: "column",
+                overflow: "hidden",
+                width: Math.max(920, Math.min(selected.length * 320 + 360, 1400)),
+                padding: 0,
+                boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.35)",
+              }}
+            >
+              {/* Header */}
+              <div style={{ flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", borderBottom: "1px solid hsl(var(--border))" }}>
+                <div>
+                  <h3 style={{ fontWeight: 700, fontSize: "1.05rem", color: "hsl(var(--text-primary))", display: "flex", alignItems: "center", gap: 8, margin: 0 }}>
+                    📊 Perbandingan {selected.length} Simulasi & Rekomendasi
+                  </h3>
+                  <p style={{ fontSize: "0.78rem", color: "hsl(var(--text-muted))", margin: "2px 0 0" }}>
+                    Analisis risiko VaR komparatif dan saran alokasi investasi berdasarkan profil risiko
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowCompare(false)}
+                  style={{
+                    width: 32, height: 32, borderRadius: 8,
+                    border: "1px solid hsl(var(--border))", background: "hsl(var(--bg-base))",
+                    display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
+                    color: "hsl(var(--text-secondary))",
+                  }}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              {/* Scrollable Body: Rekomendasi + Table */}
+              <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+
+                {/* ═══ REKOMENDASI INVESTASI SECTION ═══ */}
+                <div style={{ flexShrink: 0, padding: "18px 20px", background: "rgba(16, 185, 129, 0.04)", borderBottom: "1px solid rgba(16, 185, 129, 0.18)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+                    <div style={{ width: 28, height: 28, borderRadius: 8, background: "rgba(16, 185, 129, 0.15)", display: "flex", alignItems: "center", justifyContent: "center", color: "hsl(var(--primary))" }}>
+                      <Sparkles size={16} />
+                    </div>
+                    <div>
+                      <h4 style={{ fontWeight: 700, fontSize: "0.95rem", color: "hsl(var(--text-primary))", margin: 0 }}>
+                        Rekomendasi Keputusan Investasi
+                      </h4>
+                      <span style={{ fontSize: "0.75rem", color: "hsl(var(--text-muted))" }}>
+                        Dievaluasi menggunakan rasio Return terhadap Risiko (Sharpe Ratio) dan proteksi batas bawah (VaR)
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Winner / Rekomendasi Utama Card */}
+                  <div
+                    style={{
+                      background: "hsl(var(--bg-surface))",
+                      border: "1.5px solid rgba(16, 185, 129, 0.35)",
+                      borderRadius: 14,
+                      padding: "16px 18px",
+                      marginBottom: 14,
+                      boxShadow: "0 2px 10px rgba(16, 185, 129, 0.06)"
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                      <span style={{ fontSize: "0.72rem", fontWeight: 700, background: "hsl(var(--primary))", color: "#fff", padding: "3px 10px", borderRadius: 20, textTransform: "uppercase", letterSpacing: "0.04em", display: "flex", alignItems: "center", gap: 4 }}>
+                        <ThumbsUp size={12} /> Rekomendasi Utama (Paling Optimal)
+                      </span>
+                      <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "hsl(var(--primary))", background: "rgba(16, 185, 129, 0.1)", padding: "2px 8px", borderRadius: 6 }}>
+                        Efisiensi Risiko Tertinggi • Sharpe: {bestSharpe.sharpe.toFixed(3)}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: "1.05rem", fontWeight: 800, color: "hsl(var(--text-primary))", marginBottom: 6 }}>
+                      ⭐ Simulasi {bestSharpe.simIndex}: {bestSharpe.displayName}
+                    </div>
+                    <p style={{ fontSize: "0.83rem", color: "hsl(var(--text-secondary))", lineHeight: 1.65, margin: 0 }}>
+                      Opsi ini paling disarankan untuk sebagian besar investor karena menghasilkan <strong>imbal hasil tertinggi untuk setiap satuan risiko (Sharpe Ratio: {bestSharpe.sharpe.toFixed(3)})</strong>.
+                      Memberikan rata-rata keuntungan <strong>{formatPct(bestSharpe.mean * 100)}/hari</strong> (~{bestSharpe.mean >= 0 ? "+" : ""}{formatIDR(Math.round(bestSharpe.mean * bestSharpe.result.portfolio_value))}/hari) dengan tingkat guncangan terkendali di <strong>±{(bestSharpe.std * 100).toFixed(2)}%/hari</strong> dan batas risiko VaR <strong>{formatPct(bestSharpe.threshold * 100)}</strong> (-{formatIDR(bestSharpe.varRp)}).
+                    </p>
+                  </div>
+
+                  {/* 3 Profil Investor Cards Grid */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 10 }}>
+                    {/* 1. Konservatif */}
+                    <div style={{ background: "hsl(var(--bg-surface))", border: "1px solid hsl(var(--border))", borderRadius: 12, padding: "12px 14px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, color: "hsl(var(--accent))", fontSize: "0.78rem", fontWeight: 700 }}>
+                        <ShieldCheck size={15} /> Profil Konservatif (Paling Aman)
+                      </div>
+                      <div style={{ fontWeight: 700, fontSize: "0.86rem", color: "hsl(var(--text-primary))", marginBottom: 4 }}>
+                        Simulasi {bestSafe.simIndex}: {bestSafe.displayName}
+                      </div>
+                      <p style={{ fontSize: "0.76rem", color: "hsl(var(--text-muted))", lineHeight: 1.5, margin: 0 }}>
+                        Potensi kerugian terendah dengan batas VaR hanya <strong>{(bestSafe.varPct * 100).toFixed(2)}%</strong> (-{formatIDR(bestSafe.varRp)}). Cocok bagi investor yang mengutamakan proteksi modal utama.
+                      </p>
+                    </div>
+
+                    {/* 2. Moderat */}
+                    <div style={{ background: "hsl(var(--bg-surface))", border: "1px solid hsl(var(--border))", borderRadius: 12, padding: "12px 14px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, color: "hsl(var(--primary))", fontSize: "0.78rem", fontWeight: 700 }}>
+                        <Award size={15} /> Profil Moderat (Seimbang)
+                      </div>
+                      <div style={{ fontWeight: 700, fontSize: "0.86rem", color: "hsl(var(--text-primary))", marginBottom: 4 }}>
+                        Simulasi {bestSharpe.simIndex}: {bestSharpe.displayName}
+                      </div>
+                      <p style={{ fontSize: "0.76rem", color: "hsl(var(--text-muted))", lineHeight: 1.5, margin: 0 }}>
+                        Keseimbangan ideal antara pertumbuhan dan stabilitas dengan Sharpe Ratio <strong>{bestSharpe.sharpe.toFixed(3)}</strong>. Direkomendasikan untuk akumulasi aset berkelanjutan.
+                      </p>
+                    </div>
+
+                    {/* 3. Agresif */}
+                    <div style={{ background: "hsl(var(--bg-surface))", border: "1px solid hsl(var(--border))", borderRadius: 12, padding: "12px 14px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, color: "#f59e0b", fontSize: "0.78rem", fontWeight: 700 }}>
+                        <TrendingUp size={15} /> Profil Agresif (Return Tertinggi)
+                      </div>
+                      <div style={{ fontWeight: 700, fontSize: "0.86rem", color: "hsl(var(--text-primary))", marginBottom: 4 }}>
+                        Simulasi {bestReturn.simIndex}: {bestReturn.displayName}
+                      </div>
+                      <p style={{ fontSize: "0.76rem", color: "hsl(var(--text-muted))", lineHeight: 1.5, margin: 0 }}>
+                        Menawarkan rata-rata pertumbuhan tertinggi (<strong>{formatPct(bestReturn.mean * 100)}/hari</strong>). Cocok bagi yang siap menerima volatilitas lebih tinggi demi potensi hasil maksimal.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ═══ TABEL PERBANDINGAN METRIK ═══ */}
+                <div style={{ flexShrink: 0, overflowX: "auto", width: "100%", paddingBottom: 8 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
+                    <thead>
+                      <tr style={{ borderBottom: "1.5px solid hsl(var(--border))", position: "sticky", top: 0, background: "hsl(var(--bg-surface))", zIndex: 2 }}>
+                        <th style={{ padding: "12px 18px", textAlign: "left", fontWeight: 700, color: "hsl(var(--text-primary))", whiteSpace: "nowrap", minWidth: 140, position: "sticky", left: 0, background: "hsl(var(--bg-surface))", zIndex: 3 }}>
+                          Metrik
+                        </th>
+                        {selected.map((s, i) => (
+                          <th key={s.id} style={{ padding: "12px 18px", textAlign: "center", fontWeight: 600, color: "hsl(var(--text-primary))", whiteSpace: "nowrap", minWidth: 160 }}>
+                            <div style={{ fontSize: "0.72rem", color: "hsl(var(--text-muted))", marginBottom: 2 }}>Simulasi {i + 1}</div>
+                            {s.label || formatDateShort(s.created_at)}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((row) => {
+                        // Find best/worst values for highlighting
+                        let bestValue: number | null = null;
+                        let worstValue: number | null = null;
+                        if (row.highlightBest) {
+                          const numValues = selected.map((s) => {
+                            if (row.key === "var_rp") return s.result.var_value;
+                            if (row.key === "mean") return s.result.mean_return;
+                            if (row.key === "std") return s.result.std_return;
+                            if (row.key === "sharpe") return s.result.std_return > 0 ? s.result.mean_return / s.result.std_return : 0;
+                            return 0;
+                          });
+                          if (row.highlightBest === "min") {
+                            bestValue = Math.min(...numValues);
+                            worstValue = Math.max(...numValues);
+                          } else {
+                            bestValue = Math.max(...numValues);
+                            worstValue = Math.min(...numValues);
+                          }
+                        }
+
+                        return (
+                          <tr key={row.key} style={{ borderBottom: "1px solid hsl(var(--border))" }}>
+                            <td style={{ padding: "10px 18px", fontWeight: 600, color: "hsl(var(--text-secondary))", whiteSpace: "nowrap", position: "sticky", left: 0, background: "hsl(var(--bg-surface))", zIndex: 1 }}>
+                              {row.label}
+                            </td>
+                            {selected.map((s) => {
+                              let cellBg = "transparent";
+                              if (row.highlightBest && selected.length > 1) {
+                                const val = row.key === "var_rp" ? s.result.var_value
+                                  : row.key === "mean" ? s.result.mean_return
+                                    : row.key === "std" ? s.result.std_return
+                                      : row.key === "sharpe" ? (s.result.std_return > 0 ? s.result.mean_return / s.result.std_return : 0)
+                                        : 0;
+                                if (val === bestValue) cellBg = "rgba(16,185,129,0.08)";
+                                else if (val === worstValue) cellBg = "rgba(225,29,72,0.06)";
+                              }
+                              return (
+                                <td
+                                  key={s.id}
+                                  style={{
+                                    padding: "10px 18px", textAlign: "center",
+                                    color: "hsl(var(--text-primary))",
+                                    background: cellBg,
+                                    fontWeight: row.key === "var_rp" || row.key === "sharpe" ? 700 : 400,
+                                    transition: "background 0.2s",
+                                  }}
+                                >
+                                  {row.format(s)}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div style={{ flexShrink: 0, padding: "14px 22px", borderTop: "1px solid hsl(var(--border))", display: "flex", justifyContent: "space-between", alignItems: "center", background: "hsl(var(--bg-surface))" }}>
+                <span style={{ fontSize: "0.75rem", color: "hsl(var(--text-muted))" }}>
+                  💡 Hijau muda = nilai metrik paling menguntungkan • Merah muda = nilai paling berisiko
+                </span>
+                <button className="btn btn-secondary btn-sm" onClick={() => setShowCompare(false)}>
+                  Tutup Perbandingan
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
     </div>
   );
 }

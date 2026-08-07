@@ -405,12 +405,12 @@ export default function PortfolioPage() {
                   {/* Price and Profit/Loss */}
                   <div className="text-right flex-shrink-0 pl-2">
                     <div style={{ fontWeight: 800, color: "hsl(var(--text-primary))", fontSize: "1.05rem" }}>
-                      {formatIDR(p.total_value, true)}
+                      {formatIDR(p.total_value)}
                     </div>
                     <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
                       {isProfit ? <TrendingUp size={12} color="hsl(var(--primary))" /> : <TrendingDown size={12} color="hsl(var(--danger))" />}
                       <span className={isProfit ? "badge badge-success" : "badge badge-danger"} style={{ fontSize: "0.7rem", padding: "2px 6px" }}>
-                        {isProfit ? "+" : ""}{formatPct(gainPct)}
+                        {formatPct(gainPct)}
                       </span>
                     </div>
                   </div>

@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { portfolio_id, confidence, period_days, holding_period, custom_holdings, portfolio_value: custom_value } = body;
+    const { portfolio_id, confidence, period_days, holding_period, custom_holdings, portfolio_value: custom_value, save, label } = body;
 
     // Validate params
     if (!portfolio_id || !confidence || !period_days || !holding_period) {
@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
       if (!custom_value || custom_value <= 0) {
         return NextResponse.json({ error: "Nilai awal investasi kustom harus positif" }, { status: 400 });
       }
-      
+
       holdings = custom_holdings.map((h: any) => ({
         asset_id: h.asset_id,
         weight: Number(h.weight),
@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
       // Calculate portfolio value and individual values to determine weights
       let totalValue = 0;
       const values: Record<string, number> = {};
-      
+
       dbHoldings.forEach((h) => {
         const price = latestPriceMap[h.asset_id] ?? Number(h.avg_buy_price);
         const val = Number(h.quantity) * price;
@@ -103,7 +103,7 @@ export async function POST(req: NextRequest) {
 
     // Get historical prices for ALL assets in portfolio
     const assetIds = holdings.map((h) => h.asset_id);
-    
+
     const { data: priceHistories, error: priceErr } = await supabase
       .from("price_history")
       .select("asset_id, price, recorded_at")
@@ -183,14 +183,25 @@ export async function POST(req: NextRequest) {
       portfolio_value,
     });
 
-    // Save simulation result if it's a real database portfolio
-    if (portfolio_id !== "custom") {
+    // Save simulation result only if explicitly requested
+    if (save) {
       await supabase.from("simulations").insert({
-        portfolio_id,
+        portfolio_id: portfolio_id === "custom" ? null : portfolio_id,
         user_id: user.id,
         type: "var",
         params: body,
-        result,
+        result: {
+          var_value: result.var_value,
+          var_percentage: result.var_percentage,
+          confidence: result.confidence,
+          holding_period: result.holding_period,
+          portfolio_value: result.portfolio_value,
+          threshold: result.threshold,
+          num_observations: result.num_observations,
+          mean_return: result.mean_return,
+          std_return: result.std_return,
+        },
+        label: label || null,
       });
     }
 

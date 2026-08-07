@@ -109,10 +109,10 @@ export default async function DashboardPage() {
             <Wallet size={18} color="hsl(var(--primary))" />
           </div>
           <div className="gradient-text" style={{ fontSize: "1.7rem", fontWeight: 800, lineHeight: 1 }}>
-            {formatIDR(totalValue, true)}
+            {formatIDR(totalValue)}
           </div>
           <div style={{ marginTop: 8, fontSize: "0.82rem", color: "hsl(var(--text-secondary))" }}>
-            Modal: {formatIDR(totalCost, true)}
+            Modal: {formatIDR(totalCost)}
           </div>
         </div>
 
@@ -132,14 +132,14 @@ export default async function DashboardPage() {
               color: isProfit ? "hsl(var(--primary))" : "hsl(var(--danger))",
             }}
           >
-            {isProfit ? "+" : ""}{formatIDR(totalGainLoss, true)}
+            {totalGainLoss >= 0 ? "+" : ""}{formatIDR(totalGainLoss)}
           </div>
           <div style={{ marginTop: 8 }}>
             <span
               className={isProfit ? "badge badge-success" : "badge badge-danger"}
               style={{ fontSize: "0.78rem" }}
             >
-              {isProfit ? "+" : ""}{formatPct(totalGainLossPct)}
+              {formatPct(totalGainLossPct)}
             </span>
           </div>
         </div>
@@ -246,10 +246,10 @@ export default async function DashboardPage() {
                       </div>
                       <div style={{ textAlign: "right", flexShrink: 0 }}>
                         <div style={{ fontWeight: 700, color: "hsl(var(--text-primary))", fontSize: "0.95rem" }}>
-                          {formatIDR(p.total_value ?? 0, true)}
+                          {formatIDR(p.total_value ?? 0)}
                         </div>
                         <span className={pIsProfit ? "badge badge-success" : "badge badge-danger"} style={{ fontSize: "0.72rem" }}>
-                          {pIsProfit ? "+" : ""}{formatPct(pGainPct)}
+                          {formatPct(pGainPct)}
                         </span>
                       </div>
                     </div>
@@ -322,8 +322,8 @@ export default async function DashboardPage() {
                     </div>
                     <div style={{ marginTop: 6, fontSize: "0.82rem", color: "hsl(var(--text-primary))", fontWeight: 600 }}>
                       {sim.type === "var"
-                        ? `VaR: ${formatIDR((sim.result as { var_value?: number }).var_value ?? 0, true)}`
-                        : `Nilai Akhir: ${formatIDR((sim.result as { final_value?: number }).final_value ?? 0, true)}`}
+                        ? `VaR: ${formatIDR((sim.result as { var_value?: number }).var_value ?? 0)}`
+                        : `Nilai Akhir: ${formatIDR((sim.result as { final_value?: number }).final_value ?? 0)}`}
                     </div>
                   </div>
                 ))}

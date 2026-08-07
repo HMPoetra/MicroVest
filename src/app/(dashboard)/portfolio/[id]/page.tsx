@@ -11,7 +11,7 @@ import {
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend
 } from "recharts";
-import { formatIDR, formatPct, ASSET_TYPE_CONFIG, CHART_COLORS } from "@/lib/utils";
+import { formatIDR, formatPct, ASSET_TYPE_CONFIG, CHART_COLORS, formatNumberSeparator, parseNumberSeparator } from "@/lib/utils";
 import type { Asset, PortfolioHolding } from "@/types";
 
 interface HoldingForm {
@@ -240,10 +240,10 @@ export default function PortfolioDetailPage() {
                     </div>
                     <div style={{ textAlign: "right" }}>
                       <div style={{ fontSize: "0.78rem", fontWeight: 600, color: isProfit ? "hsl(var(--primary))" : "hsl(var(--danger))" }}>
-                        {isProfit ? "+" : ""}{formatIDR(h.gain_loss ?? 0)}
+                        {(h.gain_loss ?? 0) >= 0 ? "+" : ""}{formatIDR(h.gain_loss ?? 0)}
                       </div>
                       <div style={{ fontSize: "0.68rem", color: isProfit ? "hsl(var(--primary))" : "hsl(var(--danger))" }}>
-                        {isProfit ? "+" : ""}{formatPct(h.gain_loss_pct ?? 0)}
+                        {formatPct(h.gain_loss_pct ?? 0)}
                       </div>
                     </div>
                     <button
@@ -277,8 +277,8 @@ export default function PortfolioDetailPage() {
                 <span className="text-xs text-[hsl(var(--text-muted))]">
                   Total Nilai
                 </span>
-                <span className="text-lg leading-none font-bold sm:text-3xl text-[hsl(var(--text-primary))] truncate max-w-[200px]">
-                  {formatIDR(totalValue, true)}
+                <span className="text-lg leading-none font-bold sm:text-2xl text-[hsl(var(--text-primary))] truncate">
+                  {formatIDR(totalValue)}
                 </span>
               </button>
             </div>
@@ -386,7 +386,22 @@ export default function PortfolioDetailPage() {
                   <label htmlFor="h-price" style={{ display: "block", fontSize: "0.85rem", fontWeight: 600, color: "hsl(var(--text-primary))", marginBottom: 6 }}>
                     Harga Beli (Rp) *
                   </label>
-                  <input id="h-price" type="number" step="any" min="1" className="input-base" placeholder="1050000" value={form.avg_buy_price} onChange={(e) => setForm({ ...form, avg_buy_price: e.target.value })} required />
+                  <div style={{ position: "relative" }}>
+                    <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "hsl(var(--text-muted))", fontSize: "0.82rem", pointerEvents: "none" }}>
+                      Rp
+                    </span>
+                    <input
+                      id="h-price"
+                      type="text"
+                      inputMode="numeric"
+                      className="input-base"
+                      placeholder="1.050.000"
+                      value={form.avg_buy_price ? formatNumberSeparator(form.avg_buy_price) : ""}
+                      onChange={(e) => setForm({ ...form, avg_buy_price: String(parseNumberSeparator(e.target.value) || "") })}
+                      style={{ paddingLeft: 34 }}
+                      required
+                    />
+                  </div>
                 </div>
               </div>
               <div>
