@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
 import {
   Calculator, TrendingUp, Info, AlertTriangle, ChevronDown, HelpCircle,
-  Sparkles, Save, Trash2, BarChart2, X, Check, Award, ThumbsUp, ShieldCheck
+  Sparkles, Save, Trash2, BarChart2, X, Check, Award, ThumbsUp, ShieldCheck,
+  Coins, ArrowRight, Eye, RotateCcw
 } from "lucide-react";
 import {
   XAxis, YAxis, CartesianGrid, Tooltip,
@@ -134,8 +135,74 @@ export default function KalkulatorPage() {
   const [rateType, setRateType] = useState<"static" | "dynamic">("static");
   const [portfolios, setPortfolios] = useState<{ id: string; name: string }[]>([]);
   const [portfolioId, setPortfolioId] = useState("");
-  const [availableAssets, setAvailableAssets] = useState<{ id: string; name: string; type: string; symbol: string }[]>([]);
+  const [availableAssets, setAvailableAssets] = useState<{
+    id: string;
+    name: string;
+    type: string;
+    symbol: string;
+    unit: string;
+    harga_terkini?: number;
+    harga_sebelumnya?: number | null;
+    persentase_perubahan?: number | null;
+  }[]>([]);
   const [weights, setWeights] = useState<Record<string, number>>({});
+  const [goldType, setGoldType] = useState<"ANTAM_1GR" | "ANTAM_5GR" | "UBS_1GR">("ANTAM_1GR");
+  const [showRecommendationModal, setShowRecommendationModal] = useState(false);
+  const [showGoldModal, setShowGoldModal] = useState(false);
+  const [selectedHistoryDetail, setSelectedHistoryDetail] = useState<CompoundHistoryRecord | null>(null);
+
+  const applyPreset = (preset: "konservatif" | "moderat" | "agresif" | "emas") => {
+    setRateType("dynamic");
+    setPortfolioId("custom");
+    const newWeights: Record<string, number> = {};
+    availableAssets.forEach((a) => { newWeights[a.id] = 0; });
+
+    const gold = availableAssets.find((a) => a.symbol === "ANTAM_1GR") || availableAssets.find((a) => a.type === "emas");
+    const rdPasarUang = availableAssets.find((a) => a.name.toLowerCase().includes("likuid") || a.name.toLowerCase().includes("pasar uang") || a.type === "obligasi") || availableAssets.find((a) => a.type === "reksadana");
+    const rdSaham = availableAssets.find((a) => a.name.toLowerCase().includes("saham") || a.type === "saham") || availableAssets.find((a) => a.type === "reksadana" && a.id !== rdPasarUang?.id);
+    const crypto = availableAssets.find((a) => a.type === "kripto");
+
+    if (preset === "emas") {
+      if (gold) newWeights[gold.id] = 100;
+    } else if (preset === "konservatif") {
+      if (gold && rdPasarUang) {
+        newWeights[gold.id] = 60;
+        newWeights[rdPasarUang.id] = 40;
+      } else if (gold) {
+        newWeights[gold.id] = 100;
+      }
+    } else if (preset === "moderat") {
+      if (gold && rdPasarUang && rdSaham) {
+        newWeights[gold.id] = 35;
+        newWeights[rdPasarUang.id] = 35;
+        newWeights[rdSaham.id] = 30;
+      } else if (gold && rdSaham) {
+        newWeights[gold.id] = 50;
+        newWeights[rdSaham.id] = 50;
+      } else if (gold) {
+        newWeights[gold.id] = 100;
+      }
+    } else if (preset === "agresif") {
+      if (rdSaham && crypto && rdPasarUang) {
+        newWeights[rdSaham.id] = 50;
+        newWeights[rdPasarUang.id] = 30;
+        newWeights[crypto.id] = 20;
+      } else if (rdSaham && crypto) {
+        newWeights[rdSaham.id] = 70;
+        newWeights[crypto.id] = 30;
+      } else if (rdSaham) {
+        newWeights[rdSaham.id] = 100;
+      } else if (gold) {
+        newWeights[gold.id] = 100;
+      }
+    }
+
+    const sum = Object.values(newWeights).reduce((a, b) => a + b, 0);
+    if (sum === 0 && availableAssets.length > 0) {
+      newWeights[availableAssets[0].id] = 100;
+    }
+    setWeights(newWeights);
+  };
 
   // History & Save states
   const [saving, setSaving] = useState(false);
@@ -260,6 +327,27 @@ export default function KalkulatorPage() {
   }, []);
 
   const totalWeight = useMemo(() => Object.values(weights).reduce((a, b) => a + b, 0), [weights]);
+
+  const customAllocationItems = useMemo(() => {
+    if (rateType !== "dynamic" || portfolioId !== "custom") return [];
+    return Object.entries(weights)
+      .filter(([, w]) => w > 0)
+      .flatMap(([assetId, w]) => {
+        const asset = availableAssets.find((a) => a.id === assetId);
+        if (!asset) return [];
+        const amount = (principal * w) / 100;
+        return [{ asset, weight: w, amount }];
+      });
+  }, [rateType, portfolioId, weights, availableAssets, principal]);
+
+  const getAssetReason = (type: string): string => {
+    if (type === "emas") return "Aset safe haven (lindung nilai) terhadap inflasi, depresiasi mata uang, dan ketidakpastian ekonomi. Cocok sebagai fondasi dan stabilisator portofolio.";
+    if (type === "reksadana") return "Instrumen diversifikasi yang dikelola manajer investasi profesional. Menawarkan eksposur pasar lebih luas dengan risiko lebih terukur.";
+    if (type === "obligasi") return "Memberikan pendapatan tetap (kupon) secara berkala dengan risiko relatif lebih rendah dibanding saham. Cocok untuk investor konservatif.";
+    if (type === "kripto") return "Aset berisiko tinggi dengan volatilitas ekstrem namun berpotensi return besar. Alokasikan hanya sebagian kecil (<10%) dari total portofolio.";
+    if (type === "saham") return "Potensi return tinggi mengikuti pertumbuhan perusahaan dengan volatilitas lebih besar. Cocok untuk horizon investasi jangka panjang (>3 tahun).";
+    return "Aset investasi umum. Pastikan alokasi sesuai profil risiko dan tujuan investasi Anda.";
+  };
 
   // Live calculation for static rate (only when user has provided inputs)
   useEffect(() => {
@@ -433,10 +521,10 @@ export default function KalkulatorPage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-5 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-[400px_1fr] gap-6 items-start">
         {/* Input panel */}
-        <div className="card" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: 16 }}>
-          <h2 style={{ fontWeight: 700, fontSize: "0.95rem", color: "hsl(var(--text-primary))", marginBottom: 4 }}>
+        <div className="card" style={{ padding: "26px", display: "flex", flexDirection: "column", gap: 16 }}>
+          <h2 style={{ fontWeight: 700, fontSize: "1rem", color: "hsl(var(--text-primary))", marginBottom: 4 }}>
             Isi Data Berikut
           </h2>
 
@@ -447,6 +535,38 @@ export default function KalkulatorPage() {
             <InfoTooltip text="Ini adalah uang yang Anda investasikan di awal. Semakin besar modal awal, semakin besar pula keuntungan yang bisa Anda dapatkan dari efek bunga berbunga." />
           </div>
           {inputRow("", "ci-principal", principal, setPrincipal, "Rp", undefined, 1000)}
+
+          {/* Quick Action Buttons inside Card */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: -6 }}>
+            <button
+              type="button"
+              onClick={() => setShowRecommendationModal(true)}
+              style={{
+                fontSize: "0.72rem", padding: "6px 8px", borderRadius: 6,
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+                background: "rgba(16, 185, 129, 0.1)", color: "hsl(var(--primary))",
+                border: "1px solid rgba(16, 185, 129, 0.25)", fontWeight: 600, cursor: "pointer",
+                transition: "all 0.15s"
+              }}
+            >
+              <Sparkles size={13} />
+              Rekomendasi
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowGoldModal(true)}
+              style={{
+                fontSize: "0.72rem", padding: "6px 8px", borderRadius: 6,
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+                background: "rgba(251, 191, 36, 0.12)", color: "#b45309",
+                border: "1px solid rgba(251, 191, 36, 0.3)", fontWeight: 600, cursor: "pointer",
+                transition: "all 0.15s"
+              }}
+            >
+              <Coins size={13} />
+              Konversi Emas
+            </button>
+          </div>
 
           {/* Rate type toggle */}
           <div>
@@ -514,31 +634,142 @@ export default function KalkulatorPage() {
 
               {portfolioId === "custom" && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: 12, background: "hsl(var(--bg-base))", borderRadius: 8, border: "1px solid hsl(var(--border))" }}>
-                  <label style={{ display: "block", fontSize: "0.75rem", fontWeight: 600, color: "hsl(var(--text-secondary))", marginBottom: 4 }}>
-                    Alokasi Aset (Total: <span style={{ color: totalWeight === 100 ? "hsl(var(--primary))" : "hsl(var(--danger))", fontWeight: 700 }}>{totalWeight}%</span>)
-                  </label>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 150, overflowY: "auto", paddingRight: 4 }}>
-                    {availableAssets.map((asset) => (
-                      <div key={asset.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                        <span style={{ fontSize: "0.72rem", color: "hsl(var(--text-primary))", flex: 1, textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }} title={asset.name}>
-                          {asset.name}
-                        </span>
-                        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                          <input
-                            type="number"
-                            min={0} max={100}
-                            className="input-base"
-                            value={weights[asset.id] ?? 0}
-                            onChange={(e) => {
-                              const val = Math.min(100, Math.max(0, Number(e.target.value)));
-                              setWeights(prev => ({ ...prev, [asset.id]: val }));
-                            }}
-                            style={{ width: 55, padding: "4px 6px", fontSize: "0.72rem", textAlign: "right" }}
-                          />
-                          <span style={{ fontSize: "0.72rem", color: "hsl(var(--text-muted))" }}>%</span>
-                        </div>
-                      </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <label style={{ fontSize: "0.75rem", fontWeight: 600, color: "hsl(var(--text-secondary))" }}>
+                      Alokasi Aset (Total: <span style={{ color: totalWeight === 100 ? "hsl(var(--primary))" : "hsl(var(--danger))", fontWeight: 700 }}>{totalWeight}%</span>)
+                    </label>
+                  </div>
+
+                  {/* Preset Pills */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 4, overflowX: "auto", paddingBottom: 2 }}>
+                    <span style={{ fontSize: "0.68rem", color: "hsl(var(--text-muted))", whiteSpace: "nowrap" }}>Preset:</span>
+                    {[
+                      { key: "konservatif", label: "Konservatif" },
+                      { key: "moderat", label: "Moderat" },
+                      { key: "agresif", label: "Agresif" },
+                      { key: "emas", label: "Emas 100%" },
+                    ].map((p) => (
+                      <button
+                        key={p.key}
+                        type="button"
+                        onClick={() => applyPreset(p.key as any)}
+                        style={{
+                          fontSize: "0.68rem", padding: "2px 7px", borderRadius: 4,
+                          background: "hsl(var(--bg-surface))", border: "1px solid hsl(var(--border))",
+                          color: "hsl(var(--text-primary))", cursor: "pointer", whiteSpace: "nowrap"
+                        }}
+                      >
+                        {p.label}
+                      </button>
                     ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newWeights: Record<string, number> = {};
+                        availableAssets.forEach((a) => { newWeights[a.id] = 0; });
+                        setWeights(newWeights);
+                      }}
+                      title="Reset pembagian persenan menjadi 0%"
+                      style={{
+                        fontSize: "0.68rem", padding: "2px 7px", borderRadius: 4,
+                        background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.25)",
+                        color: "hsl(var(--danger))", cursor: "pointer", whiteSpace: "nowrap",
+                        fontWeight: 600,
+                      }}
+                    >
+                      Reset
+                    </button>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: 260, overflowY: "auto", paddingRight: 4 }}>
+                    {availableAssets.map((asset) => {
+                      const w = weights[asset.id] ?? 0;
+                      const allocatedRp = ((principal > 0 ? principal : 0) * w) / 100;
+                      const isGold = asset.type === "emas" || asset.symbol.startsWith("ANTAM") || asset.symbol.startsWith("UBS");
+                      const rawPrice = asset.harga_terkini ?? 0;
+                      const isAntam5 = asset.symbol === "ANTAM_5GR";
+                      const pricePerUnit = rawPrice;
+                      const units = (pricePerUnit > 0 && allocatedRp > 0) ? allocatedRp / pricePerUnit : 0;
+                      const priceLabel = isAntam5
+                        ? `@ ${formatIDR(rawPrice)}/5 gram`
+                        : isGold
+                          ? `@ ${formatIDR(rawPrice)}/gram`
+                          : rawPrice > 0
+                            ? `@ ${formatIDR(rawPrice)}/${asset.unit || "unit"}`
+                            : "";
+
+                      return (
+                        <div key={asset.id} style={{ display: "flex", flexDirection: "column", gap: 3, paddingBottom: 6, borderBottom: "1px solid hsl(var(--border) / 0.4)" }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: "0.75rem", fontWeight: 600, color: "hsl(var(--text-primary))", textOverflow: "ellipsis", overflow: "hidden", whiteSpace: "nowrap" }} title={asset.name}>
+                                {asset.name}
+                              </div>
+                              {priceLabel && (
+                                <div style={{ fontSize: "0.66rem", color: "hsl(var(--text-muted))", marginTop: 1 }}>
+                                  {priceLabel}
+                                </div>
+                              )}
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                className="input-base"
+                                value={weights[asset.id] ?? 0}
+                                onChange={(e) => {
+                                  const val = Math.min(100, Math.max(0, Number(e.target.value)));
+                                  setWeights(prev => ({ ...prev, [asset.id]: val }));
+                                  if (val > 0 && (asset.symbol === "ANTAM_1GR" || asset.symbol === "ANTAM_5GR" || asset.symbol === "UBS_1GR")) {
+                                    setGoldType(asset.symbol as any);
+                                  }
+                                }}
+                                style={{ width: 55, padding: "3px 6px", fontSize: "0.75rem", textAlign: "right" }}
+                              />
+                              <span style={{ fontSize: "0.72rem", color: "hsl(var(--text-muted))" }}>%</span>
+                            </div>
+                          </div>
+
+                          {/* Hasil Konversi Sinkron di bawah data aset & persenan */}
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "0.68rem" }}>
+                            <span style={{ color: w > 0 && principal > 0 ? "hsl(var(--primary))" : "hsl(var(--text-muted))", fontWeight: w > 0 && principal > 0 ? 700 : 400 }}>
+                              {formatIDR(Math.round(allocatedRp))}
+                            </span>
+                            {isAntam5 ? (
+                              <span
+                                style={{
+                                  color: w > 0 && principal > 0 ? "#b45309" : "hsl(var(--text-muted))",
+                                  fontWeight: w > 0 && principal > 0 ? 700 : 400,
+                                  background: w > 0 && principal > 0 ? "rgba(251,191,36,0.15)" : "transparent",
+                                  padding: "2px 6px",
+                                  borderRadius: 4,
+                                  border: w > 0 && principal > 0 ? "1px solid rgba(251,191,36,0.3)" : "none",
+                                }}
+                              >
+                                ≈ {units > 0 ? units.toLocaleString("id-ID", { minimumFractionDigits: 5, maximumFractionDigits: 5 }) : "0,00000"} (5 gram)
+                              </span>
+                            ) : isGold ? (
+                              <span
+                                style={{
+                                  color: w > 0 && principal > 0 ? "#b45309" : "hsl(var(--text-muted))",
+                                  fontWeight: w > 0 && principal > 0 ? 700 : 400,
+                                  background: w > 0 && principal > 0 ? "rgba(251,191,36,0.15)" : "transparent",
+                                  padding: "2px 6px",
+                                  borderRadius: 4,
+                                  border: w > 0 && principal > 0 ? "1px solid rgba(251,191,36,0.3)" : "none",
+                                }}
+                              >
+                                ≈ {units > 0 ? units.toLocaleString("id-ID", { minimumFractionDigits: 5, maximumFractionDigits: 5 }) : "0,00000"} gram
+                              </span>
+                            ) : rawPrice > 0 && w > 0 && principal > 0 ? (
+                              <span style={{ color: "hsl(var(--text-secondary))", fontWeight: 500 }}>
+                                ≈ {(allocatedRp / rawPrice).toLocaleString("id-ID", { maximumFractionDigits: 2 })} {asset.unit || "unit"}
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                   {totalWeight !== 100 && (
                     <p style={{ fontSize: "0.68rem", color: "hsl(var(--danger))", display: "flex", gap: 2, alignItems: "center" }}>
@@ -694,6 +925,165 @@ export default function KalkulatorPage() {
                   </div>
                 ))}
               </div>
+
+              {/* ═══ REKOMENDASI PENGALOKASIAN MODAL ═══ */}
+              {customAllocationItems.length > 0 && (
+                <div className="animate-fade-in-up" style={{ borderRadius: 16, overflow: "hidden", border: "1.5px solid rgba(16,185,129,0.25)", background: "linear-gradient(135deg, rgba(16,185,129,0.04) 0%, rgba(99,102,241,0.03) 100%)" }}>
+                  <div style={{ padding: "14px 20px", borderBottom: "1px solid rgba(16,185,129,0.15)", display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ width: 28, height: 28, borderRadius: 8, background: "rgba(16,185,129,0.15)", display: "flex", alignItems: "center", justifyContent: "center", color: "hsl(var(--primary))", flexShrink: 0 }}>
+                      <Sparkles size={15} />
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: "0.9rem", color: "hsl(var(--text-primary))" }}>Rekomendasi Pengalokasian Modal</div>
+                      <div style={{ fontSize: "0.73rem", color: "hsl(var(--text-muted))" }}>Berdasarkan modal {formatIDR(principal)} dan komposisi portofolio kustom Anda</div>
+                    </div>
+                  </div>
+                  <div style={{ padding: "12px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
+                    {customAllocationItems.map(({ asset, weight, amount }) => {
+                      const type = asset.type;
+                      const profileLabel = type === "kripto" ? "Agresif" : type === "emas" || type === "obligasi" ? "Konservatif" : "Moderat";
+                      const profileColor = type === "kripto" ? "#f59e0b" : type === "emas" || type === "obligasi" ? "hsl(var(--accent))" : "hsl(var(--primary))";
+                      return (
+                        <div key={asset.id} style={{ background: "hsl(var(--bg-surface))", borderRadius: 12, border: "1px solid hsl(var(--border))", padding: "12px 14px" }}>
+                          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, marginBottom: 6 }}>
+                            <div>
+                              <div style={{ fontWeight: 700, fontSize: "0.85rem", color: "hsl(var(--text-primary))" }}>{asset.name}</div>
+                              <div style={{ fontSize: "0.72rem", color: "hsl(var(--text-muted))", marginTop: 1 }}>
+                                Alokasi: <strong style={{ color: "hsl(var(--text-primary))" }}>{weight}%</strong> dari modal
+                              </div>
+                            </div>
+                            <div style={{ textAlign: "right", flexShrink: 0 }}>
+                              <div style={{ fontWeight: 800, fontSize: "1rem", color: "hsl(var(--primary))" }}>{formatIDR(Math.round(amount))}</div>
+                              <span style={{ fontSize: "0.67rem", fontWeight: 700, color: profileColor, padding: "2px 6px", borderRadius: 4, display: "inline-block", marginTop: 2, background: "rgba(0,0,0,0.06)" }}>{profileLabel}</span>
+                            </div>
+                          </div>
+                          <p style={{ fontSize: "0.76rem", color: "hsl(var(--text-secondary))", lineHeight: 1.6, margin: 0 }}>💡 {getAssetReason(type)}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ padding: "8px 20px", borderTop: "1px solid rgba(16,185,129,0.1)", fontSize: "0.7rem", color: "hsl(var(--text-muted))", background: "rgba(16,185,129,0.02)" }}>
+                    ⚠️ Rekomendasi ini bersifat informatif berdasarkan data historis — bukan saran finansial profesional.
+                  </div>
+                </div>
+              )}
+
+              {/* ═══ TRANSCRIPT HARGA & KONVERSI EMAS (HANYA MUNCUL JIKA ADA ASET EMAS DIPILIH) ═══ */}
+              {(() => {
+                const allGoldOptions: Array<{ key: "ANTAM_1GR" | "ANTAM_5GR" | "UBS_1GR"; label: string; unitWeight: number }> = [
+                  { key: "ANTAM_1GR", label: "Antam 1gr", unitWeight: 1 },
+                  { key: "ANTAM_5GR", label: "Antam 5gr", unitWeight: 5 },
+                  { key: "UBS_1GR", label: "UBS 1gr", unitWeight: 1 },
+                ];
+
+                // Filter HANYA aset emas yang dipilih (bobot > 0%) jika kustom
+                const activeGoldOptions = allGoldOptions.filter((g) => {
+                  const asset = availableAssets.find((a) => a.symbol === g.key);
+                  if (!asset || !asset.harga_terkini) return false;
+                  if (rateType === "dynamic" && portfolioId === "custom") {
+                    return (weights[asset.id] ?? 0) > 0;
+                  }
+                  return rateType === "dynamic";
+                });
+
+                // Jika tidak ada aset emas yang dipilih, JANGAN tampilkan card ini sama sekali
+                if (activeGoldOptions.length === 0 || !result || principal <= 0) return null;
+
+                const currentSelectedKey = activeGoldOptions.some((g) => g.key === goldType)
+                  ? goldType
+                  : activeGoldOptions[0].key;
+
+                const currentGoldOption = activeGoldOptions.find((g) => g.key === currentSelectedKey) || activeGoldOptions[0];
+                const goldAsset = availableAssets.find((a) => a.symbol === currentGoldOption.key);
+                const isAntam5 = currentGoldOption.key === "ANTAM_5GR";
+                const rawPrice = goldAsset?.harga_terkini ?? 0;
+                
+                const assetWeight = (rateType === "dynamic" && portfolioId === "custom" && goldAsset)
+                  ? (weights[goldAsset.id] ?? 0)
+                  : 100;
+                const goldModal = (principal * assetWeight) / 100;
+                const unitsAvailable = rawPrice > 0 && goldModal > 0 ? goldModal / rawPrice : null;
+
+                return (
+                  <div className="animate-fade-in-up" style={{ borderRadius: 16, overflow: "hidden", border: "1.5px solid rgba(251,191,36,0.3)", background: "linear-gradient(135deg, rgba(251,191,36,0.05) 0%, rgba(245,158,11,0.03) 100%)" }}>
+                    <div style={{ padding: "14px 20px", borderBottom: "1px solid rgba(251,191,36,0.15)", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: "1.2rem" }}>🪙</span>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: "0.92rem", color: "hsl(var(--text-primary))" }}>Transcript Harga &amp; Konversi Emas</div>
+                          <div style={{ fontSize: "0.74rem", color: "hsl(var(--text-muted))" }}>
+                            Alokasi {currentGoldOption.label} ({assetWeight}%): {formatIDR(goldModal)}
+                          </div>
+                        </div>
+                      </div>
+                      {activeGoldOptions.length > 1 && (
+                        <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                          {activeGoldOptions.map((g) => (
+                            <button
+                              key={g.key}
+                              type="button"
+                              className={currentSelectedKey === g.key ? "btn btn-primary btn-sm" : "btn btn-secondary btn-sm"}
+                              style={{ fontSize: "0.72rem", padding: "4px 10px" }}
+                              onClick={() => setGoldType(g.key)}
+                            >
+                              {g.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ padding: "16px 20px" }}>
+                      <div style={{ display: "grid", gridTemplateColumns: `repeat(${activeGoldOptions.length}, 1fr)`, gap: 10, marginBottom: 14 }}>
+                        {activeGoldOptions.map((g) => {
+                          const asset = availableAssets.find((a) => a.symbol === g.key);
+                          if (!asset?.harga_terkini) return null;
+                          const isSelected = currentSelectedKey === g.key;
+                          const w = (rateType === "dynamic" && portfolioId === "custom") ? (weights[asset.id] ?? 0) : 100;
+                          return (
+                            <button
+                              key={g.key}
+                              type="button"
+                              style={{
+                                padding: "10px 12px", borderRadius: 10, cursor: "pointer", textAlign: "left",
+                                background: isSelected ? "rgba(251,191,36,0.12)" : "hsl(var(--bg-base))",
+                                border: isSelected ? "1.5px solid rgba(251,191,36,0.45)" : "1px solid hsl(var(--border))",
+                                transition: "all 0.15s",
+                              }}
+                              onClick={() => setGoldType(g.key)}
+                            >
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                <div style={{ fontSize: "0.7rem", color: "hsl(var(--text-muted))", marginBottom: 3, fontWeight: 600 }}>{g.label}</div>
+                                {rateType === "dynamic" && portfolioId === "custom" && <span style={{ fontSize: "0.68rem", fontWeight: 700, color: "hsl(var(--primary))" }}>{w}%</span>}
+                              </div>
+                              <div style={{ fontWeight: 700, fontSize: "0.85rem", color: "#92400e" }}>{formatIDR(asset.harga_terkini)}</div>
+                              <div style={{ fontSize: "0.66rem", color: "#b45309", marginTop: 2 }}>per {g.unitWeight} gram</div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {rawPrice > 0 && unitsAvailable !== null ? (
+                        <div style={{ padding: "18px 20px", background: "rgba(251,191,36,0.09)", borderRadius: 12, border: "1px solid rgba(251,191,36,0.25)", textAlign: "center" }}>
+                          <div style={{ fontSize: "0.8rem", color: "#92400e", marginBottom: 8, fontWeight: 600 }}>
+                            Dengan modal alokasi {formatIDR(goldModal)} ({currentGoldOption.label} · {assetWeight}%), Anda dapat memiliki:
+                          </div>
+                          <div style={{ fontSize: "2.2rem", fontWeight: 900, color: "#b45309", lineHeight: 1, letterSpacing: "-0.02em" }}>
+                            {unitsAvailable.toLocaleString("id-ID", { minimumFractionDigits: 5, maximumFractionDigits: 5 })} {isAntam5 ? "(5 gram)" : "gram"}
+                          </div>
+                          <div style={{ fontSize: "0.78rem", color: "#92400e", marginTop: 8, opacity: 0.9 }}>
+                            {isAntam5
+                              ? `Emas Antam 5 Gram · Total ${(unitsAvailable * 5).toLocaleString("id-ID", { minimumFractionDigits: 5, maximumFractionDigits: 5 })} gram murni · Harga: ${formatIDR(rawPrice)} / 5 gram`
+                              : `Emas ${currentGoldOption.key === "ANTAM_1GR" ? "Antam 1 gram" : "UBS 1 gram"} · Harga: ${formatIDR(rawPrice)} / gram`}
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ textAlign: "center", color: "hsl(var(--text-muted))", fontSize: "0.85rem", padding: "16px" }}>
+                          Data harga emas tidak tersedia
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Area chart */}
               <div className="card py-4 sm:py-0 overflow-hidden">
@@ -1017,15 +1407,25 @@ export default function KalkulatorPage() {
                           {formatIDR(h.result.final_value)}
                         </td>
                         <td style={{ padding: "10px 10px", textAlign: "center" }}>
-                          <button
-                            className="btn btn-danger btn-sm"
-                            style={{ padding: "4px 8px" }}
-                            onClick={() => handleDeleteHistory(h.id)}
-                            disabled={deletingId === h.id}
-                            title="Hapus"
-                          >
-                            <Trash2 size={12} />
-                          </button>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              style={{ padding: "4px 8px", fontSize: "0.72rem", display: "flex", alignItems: "center", gap: 3 }}
+                              onClick={() => setSelectedHistoryDetail(h)}
+                              title="Lihat Detail Riwayat"
+                            >
+                              <Eye size={12} /> Detail
+                            </button>
+                            <button
+                              className="btn btn-danger btn-sm"
+                              style={{ padding: "4px 6px" }}
+                              onClick={() => handleDeleteHistory(h.id)}
+                              disabled={deletingId === h.id}
+                              title="Hapus"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -1328,6 +1728,505 @@ export default function KalkulatorPage() {
           </div>
         );
       })()}
+      {/* ═══════════════════════════════════════════════════════════════════════
+          MODAL REKOMENDASI PENGALOKASIAN MODAL (FROM CARD BUTTON)
+         ═══════════════════════════════════════════════════════════════════════ */}
+      {showRecommendationModal && (
+        <div
+          style={{
+            position: "fixed", inset: 0, zIndex: 1100,
+            background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            padding: 16,
+          }}
+          onClick={(e) => { if (e.target === e.currentTarget) setShowRecommendationModal(false); }}
+        >
+          <div
+            className="card animate-fade-in-up"
+            style={{
+              maxWidth: 720, width: "100%", maxHeight: "90vh",
+              display: "flex", flexDirection: "column", overflow: "hidden",
+              padding: 0, boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.35)",
+            }}
+          >
+            {/* Header */}
+            <div style={{ padding: "16px 20px", borderBottom: "1px solid hsl(var(--border))", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(16,185,129,0.15)", display: "flex", alignItems: "center", justifyContent: "center", color: "hsl(var(--primary))" }}>
+                  <Sparkles size={18} />
+                </div>
+                <div>
+                  <h3 style={{ fontWeight: 700, fontSize: "1.05rem", color: "hsl(var(--text-primary))", margin: 0 }}>
+                    Rekomendasi Pengalokasian Modal
+                  </h3>
+                  <p style={{ fontSize: "0.76rem", color: "hsl(var(--text-muted))", margin: "2px 0 0" }}>
+                    Saran pembagian modal {formatIDR(principal > 0 ? principal : 10000000)} berdasarkan profil risiko &amp; tujuan investasi
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowRecommendationModal(false)}
+                style={{ width: 32, height: 32, borderRadius: 8, border: "1px solid hsl(var(--border))", background: "hsl(var(--bg-base))", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "hsl(var(--text-secondary))" }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Content list of 4 strategies */}
+            <div style={{ padding: "20px", overflowY: "auto", display: "flex", flexDirection: "column", gap: 14 }}>
+              {(() => {
+                const targetModal = principal > 0 ? principal : 10000000;
+                return [
+                  {
+                    id: "konservatif",
+                    title: "Profil Konservatif (Proteksi Modal & Anti-Inflasi)",
+                    badge: "Paling Aman",
+                    badgeBg: "rgba(16,185,129,0.1)",
+                    badgeColor: "hsl(var(--primary))",
+                    allocations: [
+                      { name: "Emas Antam 1 Gram", pct: 60, val: targetModal * 0.6 },
+                      { name: "Reksa Dana Pasar Uang / Obligasi", pct: 40, val: targetModal * 0.4 },
+                    ],
+                    reason: "Mengutamakan perlindungan nilai modal terhadap inflasi dengan porsi emas dominan dan likuiditas pasar uang berisiko minimal.",
+                  },
+                  {
+                    id: "moderat",
+                    title: "Profil Moderat (Keseimbangan Imbal Hasil & Risiko)",
+                    badge: "Rekomendasi Utama",
+                    badgeBg: "rgba(59,130,246,0.1)",
+                    badgeColor: "hsl(var(--accent))",
+                    allocations: [
+                      { name: "Emas Antam 1 Gram", pct: 35, val: targetModal * 0.35 },
+                      { name: "Reksa Dana Likuid / Pasar Uang", pct: 35, val: targetModal * 0.35 },
+                      { name: "Reksa Dana Saham / Saham", pct: 30, val: targetModal * 0.3 },
+                    ],
+                    reason: "Kombinasi ideal antara stabilitas emas, pendapatan pasar uang, dan potensi capital gain saham untuk pertumbuhan modal jangka menengah.",
+                  },
+                  {
+                    id: "agresif",
+                    title: "Profil Agresif (Maksimal Pertumbuhan Jangka Panjang)",
+                    badge: "Tinggi Imbal Hasil",
+                    badgeBg: "rgba(245,158,11,0.12)",
+                    badgeColor: "#d97706",
+                    allocations: [
+                      { name: "Reksa Dana Saham / Saham", pct: 50, val: targetModal * 0.5 },
+                      { name: "Reksa Dana Pasar Uang", pct: 30, val: targetModal * 0.3 },
+                      { name: "Aset Kripto", pct: 20, val: targetModal * 0.2 },
+                    ],
+                    reason: "Mengejar pertumbuhan return tertinggi dengan toleransi fluktuasi pasar dinamis. Cocok untuk jangka panjang (>3 tahun).",
+                  },
+                  {
+                    id: "emas",
+                    title: "Safe Haven Murni (100% Emas Fisik)",
+                    badge: "Anti Krisis",
+                    badgeBg: "rgba(251,191,36,0.15)",
+                    badgeColor: "#b45309",
+                    allocations: [
+                      { name: "Emas Antam 1 Gram", pct: 100, val: targetModal },
+                    ],
+                    reason: "Instrumen fisik bebas risiko pihak ketiga, terbukti mempertahankan daya beli selama ratusan tahun dan likuid dijual sewaktu-waktu.",
+                  },
+                ].map((s) => (
+                  <div
+                    key={s.id}
+                    style={{
+                      borderRadius: 12, padding: "16px",
+                      background: "hsl(var(--bg-base))",
+                      border: "1px solid hsl(var(--border))",
+                      display: "flex", flexDirection: "column", gap: 10,
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+                      <div style={{ fontWeight: 700, fontSize: "0.92rem", color: "hsl(var(--text-primary))" }}>
+                        {s.title}
+                      </div>
+                      <span style={{ fontSize: "0.7rem", fontWeight: 700, color: s.badgeColor, background: s.badgeBg, padding: "2px 8px", borderRadius: 6 }}>
+                        {s.badge}
+                      </span>
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
+                      {s.allocations.map((a, i) => (
+                        <div key={i} style={{ background: "hsl(var(--bg-surface))", padding: "8px 10px", borderRadius: 8, border: "1px solid hsl(var(--border))" }}>
+                          <div style={{ fontSize: "0.72rem", color: "hsl(var(--text-muted))" }}>{a.name} ({a.pct}%)</div>
+                          <div style={{ fontWeight: 700, fontSize: "0.86rem", color: "hsl(var(--primary))" }}>{formatIDR(Math.round(a.val))}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <p style={{ fontSize: "0.78rem", color: "hsl(var(--text-secondary))", margin: 0, lineHeight: 1.55 }}>
+                      💡 <strong>Alasan:</strong> {s.reason}
+                    </p>
+
+                    <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        style={{ fontSize: "0.75rem", padding: "6px 12px", gap: 6 }}
+                        onClick={() => {
+                          if (principal <= 0) setPrincipal(10000000);
+                          applyPreset(s.id as any);
+                          setShowRecommendationModal(false);
+                        }}
+                      >
+                        <Check size={13} />
+                        Terapkan Alokasi Ini
+                      </button>
+                    </div>
+                  </div>
+                ));
+              })()}
+            </div>
+
+            {/* Footer */}
+            <div style={{ padding: "12px 20px", borderTop: "1px solid hsl(var(--border))", background: "hsl(var(--bg-surface))", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: "0.72rem", color: "hsl(var(--text-muted))" }}>
+                Klik tombol "Terapkan Alokasi Ini" untuk otomatis mengisi form parameter.
+              </span>
+              <button className="btn btn-secondary btn-sm" onClick={() => setShowRecommendationModal(false)}>
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════════════════
+          MODAL KONVERSI EMAS & TRANSCRIPT (FROM CARD BUTTON)
+         ═══════════════════════════════════════════════════════════════════════ */}
+      {showGoldModal && (() => {
+        const goldList: Array<{ key: "ANTAM_1GR" | "ANTAM_5GR" | "UBS_1GR"; label: string; unitWeight: number }> = [
+          { key: "ANTAM_1GR", label: "Emas Antam 1 Gram", unitWeight: 1 },
+          { key: "ANTAM_5GR", label: "Emas Antam 5 Gram", unitWeight: 5 },
+          { key: "UBS_1GR", label: "Emas UBS 1 Gram", unitWeight: 1 },
+        ];
+        const modalValue = principal > 0 ? principal : 10000000;
+
+        return (
+          <div
+            style={{
+              position: "fixed", inset: 0, zIndex: 1100,
+              background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              padding: 16,
+            }}
+            onClick={(e) => { if (e.target === e.currentTarget) setShowGoldModal(false); }}
+          >
+            <div
+              className="card animate-fade-in-up"
+              style={{
+                maxWidth: 680, width: "100%", maxHeight: "90vh",
+                display: "flex", flexDirection: "column", overflow: "hidden",
+                padding: 0, boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.35)",
+              }}
+            >
+              {/* Header */}
+              <div style={{ padding: "16px 20px", borderBottom: "1px solid hsl(var(--border))", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(251,191,36,0.15)", display: "flex", alignItems: "center", justifyContent: "center", color: "#b45309" }}>
+                    <Coins size={18} />
+                  </div>
+                  <div>
+                    <h3 style={{ fontWeight: 700, fontSize: "1.05rem", color: "hsl(var(--text-primary))", margin: 0 }}>
+                      Transcript Nilai &amp; Konversi Harga Emas
+                    </h3>
+                    <p style={{ fontSize: "0.76rem", color: "hsl(var(--text-muted))", margin: "2px 0 0" }}>
+                      Konversi presisi modal {formatIDR(modalValue)} ke gram emas Antam &amp; UBS
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowGoldModal(false)}
+                  style={{ width: 32, height: 32, borderRadius: 8, border: "1px solid hsl(var(--border))", background: "hsl(var(--bg-base))", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "hsl(var(--text-secondary))" }}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              {/* Content */}
+              <div style={{ padding: "20px", overflowY: "auto", display: "flex", flexDirection: "column", gap: 16 }}>
+                {/* Info Note */}
+                <div style={{ padding: "10px 14px", background: "rgba(251,191,36,0.08)", borderRadius: 10, border: "1px solid rgba(251,191,36,0.2)", fontSize: "0.8rem", color: "#92400e", lineHeight: 1.55 }}>
+                  💡 <strong>Informasi Konversi:</strong> Satuan disajikan dalam <strong>bilangan desimal presisi (5 digit di belakang koma)</strong> sesuai satuan data aset (per 1 gram untuk Antam 1g &amp; UBS, dan per 5 gram untuk Antam 5g).
+                </div>
+
+                {/* 3 Gold Types Grid */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {goldList.map((g) => {
+                    const asset = availableAssets.find((a) => a.symbol === g.key);
+                    const rawPrice = asset?.harga_terkini ?? 0;
+                    const isAntam5 = g.key === "ANTAM_5GR";
+                    const units = rawPrice > 0 ? modalValue / rawPrice : 0;
+
+                    return (
+                      <div
+                        key={g.key}
+                        style={{
+                          borderRadius: 12, padding: "16px",
+                          background: "hsl(var(--bg-base))",
+                          border: "1.5px solid rgba(251,191,36,0.3)",
+                          display: "flex", flexDirection: "column", gap: 10,
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8 }}>
+                          <div>
+                            <div style={{ fontWeight: 700, fontSize: "0.95rem", color: "hsl(var(--text-primary))" }}>
+                              {g.label}
+                            </div>
+                            <div style={{ fontSize: "0.75rem", color: "hsl(var(--text-muted))", marginTop: 2 }}>
+                              Harga Satuan: <strong>{rawPrice > 0 ? formatIDR(rawPrice) : "Memuat..."}</strong> per {g.unitWeight} gram
+                            </div>
+                          </div>
+                          <div style={{ textAlign: "right" }}>
+                            <div style={{ fontSize: "0.72rem", color: "#92400e", fontWeight: 600 }}>Dapat Memiliki:</div>
+                            <div style={{ fontSize: "1.45rem", fontWeight: 900, color: "#b45309", lineHeight: 1.1 }}>
+                              {units > 0 ? units.toLocaleString("id-ID", { minimumFractionDigits: 5, maximumFractionDigits: 5 }) : "0,00000"} {isAntam5 ? "(5 gram)" : "gram"}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 8, borderTop: "1px solid hsl(var(--border))" }}>
+                          <span style={{ fontSize: "0.72rem", color: "hsl(var(--text-muted))" }}>
+                            {isAntam5
+                              ? `Total ${(units * 5).toLocaleString("id-ID", { minimumFractionDigits: 3, maximumFractionDigits: 3 })} gram murni (satuan 5 gram)`
+                              : `Total ${units > 0 ? units.toFixed(3) : 0} gram murni`}
+                          </span>
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-sm"
+                            style={{ fontSize: "0.73rem", padding: "5px 10px" }}
+                            onClick={() => {
+                              setRateType("dynamic");
+                              setPortfolioId("custom");
+                              if (principal <= 0) setPrincipal(10000000);
+                              if (asset) {
+                                const newWeights: Record<string, number> = {};
+                                availableAssets.forEach((a) => { newWeights[a.id] = a.id === asset.id ? 100 : 0; });
+                                setWeights(newWeights);
+                                setGoldType(g.key);
+                              }
+                              setShowGoldModal(false);
+                            }}
+                          >
+                            Pilih Emas Ini (100%)
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div style={{ padding: "12px 20px", borderTop: "1px solid hsl(var(--border))", background: "hsl(var(--bg-surface))", display: "flex", justifyContent: "flex-end" }}>
+                <button className="btn btn-secondary btn-sm" onClick={() => setShowGoldModal(false)}>
+                  Tutup
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+      {/* ═══════════════════════════════════════════════════════════════════════
+          MODAL DETAIL RIWAYAT KALKULATOR
+         ═══════════════════════════════════════════════════════════════════════ */}
+      {selectedHistoryDetail && (
+        <div
+          style={{
+            position: "fixed", inset: 0, zIndex: 1100,
+            background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            padding: 16,
+          }}
+          onClick={(e) => { if (e.target === e.currentTarget) setSelectedHistoryDetail(null); }}
+        >
+          <div
+            className="card animate-fade-in-up"
+            style={{
+              maxWidth: 720, width: "100%", maxHeight: "90vh",
+              display: "flex", flexDirection: "column", overflow: "hidden",
+              padding: 0, boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.35)",
+            }}
+          >
+            {/* Header */}
+            <div style={{ padding: "16px 20px", borderBottom: "1px solid hsl(var(--border))", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 8, background: "rgba(16,185,129,0.15)", display: "flex", alignItems: "center", justifyContent: "center", color: "hsl(var(--primary))" }}>
+                  <Eye size={18} />
+                </div>
+                <div>
+                  <h3 style={{ fontWeight: 700, fontSize: "1.05rem", color: "hsl(var(--text-primary))", margin: 0 }}>
+                    {selectedHistoryDetail.label || "Detail Riwayat Kalkulasi"}
+                  </h3>
+                  <p style={{ fontSize: "0.76rem", color: "hsl(var(--text-muted))", margin: "2px 0 0" }}>
+                    Disimpan pada {formatDateShort(selectedHistoryDetail.created_at)} · {selectedHistoryDetail.params?.use_dynamic ? `Dinamis (${selectedHistoryDetail.portfolio?.name || "Kustom"})` : "Bunga Tetap"}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedHistoryDetail(null)}
+                style={{ width: 32, height: 32, borderRadius: 8, border: "1px solid hsl(var(--border))", background: "hsl(var(--bg-base))", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "hsl(var(--text-secondary))" }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div style={{ padding: "20px", overflowY: "auto", display: "flex", flexDirection: "column", gap: 16 }}>
+              {/* Parameter Digunakan Grid */}
+              <div style={{ background: "hsl(var(--bg-base))", borderRadius: 12, padding: "14px 16px", border: "1px solid hsl(var(--border))" }}>
+                <div style={{ fontSize: "0.8rem", fontWeight: 700, color: "hsl(var(--text-secondary))", marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  Parameter Investasi
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10 }}>
+                  <div>
+                    <div style={{ fontSize: "0.7rem", color: "hsl(var(--text-muted))" }}>Modal Awal</div>
+                    <div style={{ fontWeight: 700, fontSize: "0.95rem", color: "hsl(var(--text-primary))" }}>
+                      {formatIDR(Number(selectedHistoryDetail.params.principal) || 0)}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "0.7rem", color: "hsl(var(--text-muted))" }}>Suku Bunga / Thn</div>
+                    <div style={{ fontWeight: 700, fontSize: "0.95rem", color: "hsl(var(--primary))" }}>
+                      {(selectedHistoryDetail.result.effective_rate * 100).toFixed(2)}%
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "0.7rem", color: "hsl(var(--text-muted))" }}>Jangka Waktu</div>
+                    <div style={{ fontWeight: 700, fontSize: "0.95rem", color: "hsl(var(--accent))" }}>
+                      {selectedHistoryDetail.params.tenor_years} tahun
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "0.7rem", color: "hsl(var(--text-muted))" }}>Setoran Bulanan</div>
+                    <div style={{ fontWeight: 700, fontSize: "0.95rem", color: "hsl(var(--text-primary))" }}>
+                      {formatIDR(Number(selectedHistoryDetail.params.additional_monthly) || 0)}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "0.7rem", color: "hsl(var(--text-muted))" }}>Frekuensi Bunga</div>
+                    <div style={{ fontWeight: 700, fontSize: "0.95rem", color: "hsl(var(--text-secondary))", textTransform: "capitalize" }}>
+                      {selectedHistoryDetail.params.frequency || "Bulanan"}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Hasil Akhir Grid */}
+              <div style={{ borderRadius: 12, padding: "16px", background: "linear-gradient(135deg, rgba(16,185,129,0.06) 0%, rgba(59,130,246,0.04) 100%)", border: "1.5px solid rgba(16,185,129,0.25)" }}>
+                <div style={{ fontSize: "0.8rem", fontWeight: 700, color: "hsl(var(--primary))", marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  Hasil Perkiraan Akhir
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+                  <div style={{ background: "hsl(var(--bg-surface))", padding: "12px 14px", borderRadius: 10, border: "1px solid hsl(var(--border))" }}>
+                    <div style={{ fontSize: "0.72rem", color: "hsl(var(--text-muted))" }}>Estimasi Nilai Akhir</div>
+                    <div style={{ fontWeight: 800, fontSize: "1.35rem", color: "hsl(var(--primary))", marginTop: 2 }}>
+                      {formatIDR(selectedHistoryDetail.result.final_value)}
+                    </div>
+                  </div>
+
+                  <div style={{ background: "hsl(var(--bg-surface))", padding: "12px 14px", borderRadius: 10, border: "1px solid hsl(var(--border))" }}>
+                    <div style={{ fontSize: "0.72rem", color: "hsl(var(--text-muted))" }}>Total Keuntungan (Bunga)</div>
+                    <div style={{ fontWeight: 800, fontSize: "1.35rem", color: "hsl(var(--accent))", marginTop: 2 }}>
+                      +{formatIDR(selectedHistoryDetail.result.total_interest)}
+                    </div>
+                  </div>
+
+                  <div style={{ background: "hsl(var(--bg-surface))", padding: "12px 14px", borderRadius: 10, border: "1px solid hsl(var(--border))" }}>
+                    <div style={{ fontSize: "0.72rem", color: "hsl(var(--text-muted))" }}>Total Modal yang Disetor</div>
+                    <div style={{ fontWeight: 800, fontSize: "1.25rem", color: "hsl(var(--text-primary))", marginTop: 2 }}>
+                      {formatIDR(selectedHistoryDetail.result.total_contributed)}
+                    </div>
+                  </div>
+
+                  <div style={{ background: "hsl(var(--bg-surface))", padding: "12px 14px", borderRadius: 10, border: "1px solid hsl(var(--border))" }}>
+                    <div style={{ fontSize: "0.72rem", color: "hsl(var(--text-muted))" }}>Persentase Imbal Hasil (ROI)</div>
+                    <div style={{ fontWeight: 800, fontSize: "1.25rem", color: "hsl(var(--primary))", marginTop: 2 }}>
+                      {formatPct((selectedHistoryDetail.result.total_interest / Math.max(1, selectedHistoryDetail.result.total_contributed)) * 100)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Rincian Tabel Proyeksi Pertumbuhan */}
+              {selectedHistoryDetail.result.projection && selectedHistoryDetail.result.projection.length > 0 && (
+                <div style={{ background: "hsl(var(--bg-surface))", borderRadius: 12, border: "1px solid hsl(var(--border))", overflow: "hidden" }}>
+                  <div style={{ padding: "10px 16px", borderBottom: "1px solid hsl(var(--border))", fontWeight: 700, fontSize: "0.82rem", color: "hsl(var(--text-primary))" }}>
+                    Rincian Pertumbuhan Investasi
+                  </div>
+                  <div style={{ maxHeight: 200, overflowY: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.75rem" }}>
+                      <thead>
+                        <tr style={{ borderBottom: "1px solid hsl(var(--border))", background: "hsl(var(--bg-base))" }}>
+                          <th style={{ padding: "8px 12px", textAlign: "left", color: "hsl(var(--text-secondary))" }}>Periode</th>
+                          <th style={{ padding: "8px 12px", textAlign: "right", color: "hsl(var(--text-secondary))" }}>Total Setoran</th>
+                          <th style={{ padding: "8px 12px", textAlign: "right", color: "hsl(var(--text-secondary))" }}>Bunga Diperoleh</th>
+                          <th style={{ padding: "8px 12px", textAlign: "right", color: "hsl(var(--text-secondary))" }}>Estimasi Saldo</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedHistoryDetail.result.projection.map((row) => (
+                          <tr key={row.period} style={{ borderBottom: "1px solid hsl(var(--border) / 0.5)" }}>
+                            <td style={{ padding: "6px 12px", fontWeight: 600 }}>{row.label}</td>
+                            <td style={{ padding: "6px 12px", textAlign: "right", color: "hsl(var(--text-muted))" }}>{formatIDR(row.total_contributed)}</td>
+                            <td style={{ padding: "6px 12px", textAlign: "right", color: "hsl(var(--accent))", fontWeight: 600 }}>+{formatIDR(row.interest_earned)}</td>
+                            <td style={{ padding: "6px 12px", textAlign: "right", color: "hsl(var(--primary))", fontWeight: 700 }}>{formatIDR(row.value)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer Actions */}
+            <div style={{ padding: "14px 20px", borderTop: "1px solid hsl(var(--border))", background: "hsl(var(--bg-surface))", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+              <button
+                className="btn btn-danger btn-sm"
+                style={{ gap: 5 }}
+                onClick={() => {
+                  const id = selectedHistoryDetail.id;
+                  setSelectedHistoryDetail(null);
+                  handleDeleteHistory(id);
+                }}
+              >
+                <Trash2 size={13} />
+                Hapus Riwayat Ini
+              </button>
+
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  className="btn btn-primary btn-sm"
+                  style={{ gap: 6 }}
+                  onClick={() => {
+                    const h = selectedHistoryDetail;
+                    if (h.params.principal) setPrincipal(Number(h.params.principal));
+                    if (h.params.tenor_years) setTenorYears(Number(h.params.tenor_years));
+                    if (h.params.frequency) setFrequency(h.params.frequency);
+                    if (h.params.additional_monthly !== undefined) setAdditionalMonthly(Number(h.params.additional_monthly));
+                    if (h.params.use_dynamic) {
+                      setRateType("dynamic");
+                      if (h.params.portfolio_id) setPortfolioId(h.params.portfolio_id);
+                    } else {
+                      setRateType("static");
+                      if (h.params.annual_rate !== undefined) setAnnualRate(Number(h.params.annual_rate));
+                    }
+                    setSelectedHistoryDetail(null);
+                    window.scrollTo({ top: 0, behavior: "smooth" });
+                  }}
+                >
+                  <RotateCcw size={13} />
+                  Muat Parameter Ini ke Kalkulator
+                </button>
+                <button className="btn btn-secondary btn-sm" onClick={() => setSelectedHistoryDetail(null)}>
+                  Tutup
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
